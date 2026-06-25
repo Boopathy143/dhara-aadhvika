@@ -259,6 +259,7 @@ async function handle(method, segments, request) {
       u = { id, name: email.split('@')[0], email, password: null, role: 'user', emailVerified: true, createdAt: new Date() };
       await users.insertOne(u);
     } else {
+      if (u.active === false) return err('Your account has been deactivated. Please contact support.', 403);
       await users.updateOne({ id: u.id }, { $set: { emailVerified: true } });
     }
     await createSession(u.id);

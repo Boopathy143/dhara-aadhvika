@@ -70,10 +70,11 @@ export default function LoginPage() {
             <TabsContent value="password" className="space-y-3 mt-4">
               <div><Label>Email</Label><Input type="email" value={email} onChange={e => setEmail(e.target.value)} /></div>
               <div><Label>Password</Label><Input type="password" value={password} onChange={e => setPassword(e.target.value)} /></div>
-              <div className="text-right text-xs"><Link href="/forgot-password" className="text-emerald-700 font-medium">Forgot password?</Link></div>
               <Button onClick={login} disabled={loading} className="w-full bg-gradient-to-r from-emerald-700 to-amber-700 text-white">{loading ? 'Signing in…' : 'Sign in'}</Button>
-              <div className="text-xs text-center text-muted-foreground">Demo: admin@dhara.com / admin123 • user@dhara.com / user123</div>
-              <div className="text-sm text-center">New here? <Link href="/register" className="text-emerald-700 font-medium">Create an account</Link></div>
+              <div className="flex items-center justify-between text-xs">
+                <Link href="/forgot-password" className="text-emerald-700 hover:underline">Forgot password?</Link>
+                <Link href="/register" className="text-amber-700 hover:underline">Create an account</Link>
+              </div>
             </TabsContent>
             <TabsContent value="otp" className="space-y-3 mt-4">
               <div><Label>Email</Label><Input type="email" value={otpEmail} onChange={e => setOtpEmail(e.target.value)} disabled={otpSent} /></div>

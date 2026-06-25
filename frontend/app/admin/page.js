@@ -59,7 +59,7 @@ export default function AdminPage() {
   const [rejectingFor, setRejectingFor] = useState(null);
 
   if (!me?.user) return <><Header /><main className="container mx-auto py-16 text-center"><h1 className="text-2xl font-bold">Sign in required</h1><Button asChild className="mt-4 bg-emerald-700"><Link href="/login">Sign in</Link></Button></main><Footer /></>;
-  if (me.user.role !== 'admin') return <><Header /><main className="container mx-auto py-16 text-center"><h1 className="text-2xl font-bold">Admin access only</h1><p className="text-muted-foreground mt-2">Sign in as admin@dhara.com / admin123</p></main><Footer /></>;
+  if (me.user.role !== 'admin') return <><Header /><main className="container mx-auto py-16 text-center"><h1 className="text-2xl font-bold">Admin access only</h1><p className="text-muted-foreground mt-2">Your account does not have admin privileges.</p></main><Footer /></>;
 
   const openNew = () => { setForm(empty); setEditingId(null); setOpen(true); };
   const openEdit = (p) => {
