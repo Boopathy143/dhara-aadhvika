@@ -27,7 +27,6 @@ function RegisterForm() {
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState(searchParams.get('verify') === '1' && searchParams.get('email') ? 'otp' : 'form'); // 'form' | 'otp'
   const [otpCode, setOtpCode] = useState('');
-  const [devHint, setDevHint] = useState('');
   const [secondsLeft, setSecondsLeft] = useState(0);
   const timerRef = useRef(null);
 
@@ -50,7 +49,6 @@ function RegisterForm() {
     const d = await res.json();
     if (!res.ok) return toast.error(d.error);
     setStep('otp');
-    if (d.devCode) setDevHint(`Dev OTP (email not configured): ${d.devCode}`);
     startCooldown(30);
     toast.success(d.message || 'OTP sent to your email');
   };
@@ -72,7 +70,6 @@ function RegisterForm() {
     setLoading(false);
     const d = await res.json();
     if (!res.ok) return toast.error(d.error);
-    if (d.devCode) setDevHint(`Dev OTP (email not configured): ${d.devCode}`);
     startCooldown(30);
     toast.success(d.message || 'OTP resent');
   };
@@ -100,12 +97,11 @@ function RegisterForm() {
                   <InputOTPGroup><InputOTPSlot index={0} /><InputOTPSlot index={1} /><InputOTPSlot index={2} /><InputOTPSlot index={3} /><InputOTPSlot index={4} /><InputOTPSlot index={5} /></InputOTPGroup>
                 </InputOTP>
               </div>
-              {devHint && <div className="text-xs p-2 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-900 dark:text-amber-200">{devHint}</div>}
               <Button onClick={verifyOtp} disabled={loading || otpCode.length !== 6} className="w-full bg-gradient-to-r from-emerald-700 to-amber-700 text-white">{loading ? 'Verifying…' : 'Verify & Create Account'}</Button>
               <Button variant="ghost" size="sm" onClick={resendOtp} disabled={loading || secondsLeft > 0} className="w-full">
                 {secondsLeft > 0 ? `Resend OTP in ${secondsLeft}s` : 'Resend OTP'}
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => { setStep('form'); setOtpCode(''); setDevHint(''); }} className="w-full text-muted-foreground">Use a different email</Button>
+              <Button variant="ghost" size="sm" onClick={() => { setStep('form'); setOtpCode(''); }} className="w-full text-muted-foreground">Use a different email</Button>
             </>
           )}
         </CardContent></Card>

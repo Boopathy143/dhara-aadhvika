@@ -20,7 +20,6 @@ export default function LoginPage() {
   const [otpEmail, setOtpEmail] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [otpSent, setOtpSent] = useState(false);
-  const [otpHint, setOtpHint] = useState('');
   const [loading, setLoading] = useState(false);
 
   const login = async () => {
@@ -48,8 +47,7 @@ export default function LoginPage() {
     const d = await res.json();
     if (!res.ok) { toast.error(d.error); return; }
     setOtpSent(true);
-    if (d.devCode) setOtpHint(`Dev OTP (email not configured): ${d.devCode}`);
-    toast.success('OTP sent');
+    toast.success(d.message || 'OTP sent to your email');
   };
   const verifyOtp = async () => {
     setLoading(true);
@@ -82,12 +80,11 @@ export default function LoginPage() {
               {!otpSent ? (<Button onClick={sendOtp} disabled={loading} className="w-full bg-emerald-700">{loading ? 'Sending…' : 'Send OTP'}</Button>) : (
                 <>
                   <div><Label>Enter 6-digit code</Label><InputOTP maxLength={6} value={otpCode} onChange={setOtpCode}><InputOTPGroup><InputOTPSlot index={0} /><InputOTPSlot index={1} /><InputOTPSlot index={2} /><InputOTPSlot index={3} /><InputOTPSlot index={4} /><InputOTPSlot index={5} /></InputOTPGroup></InputOTP></div>
-                  {otpHint && <div className="text-xs p-2 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-900 dark:text-amber-200">{otpHint}</div>}
                   <Button onClick={verifyOtp} disabled={loading || otpCode.length !== 6} className="w-full bg-gradient-to-r from-emerald-700 to-amber-700 text-white">Verify & Sign in</Button>
-                  <Button variant="ghost" size="sm" onClick={() => { setOtpSent(false); setOtpCode(''); setOtpHint(''); }} className="w-full">Use different email</Button>
+                  <Button variant="ghost" size="sm" onClick={() => { setOtpSent(false); setOtpCode(''); }} className="w-full">Use different email</Button>
                 </>
               )}
-              <p className="text-xs text-muted-foreground text-center">Email service is not configured — OTP shown on screen. Provide SMTP/Resend/Brevo creds to enable real delivery.</p>
+              <p className="text-xs text-muted-foreground text-center">We&apos;ll email you a 6-digit code to sign in securely.</p>
             </TabsContent>
           </Tabs>
         </CardContent></Card>

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { v4 as uuid } from 'uuid';
 import { col, getDb } from '@/lib/db';
 import { hashPassword, verifyPassword, createSession, destroySession, getCurrentUser, requireUser, requireAdmin } from '@/lib/auth';
-import { sendOtpEmail } from '@/lib/email';
+import { sendOtpEmail, sendPasswordResetEmail, isEmailConfigured } from '@/lib/email';
 import { CATEGORIES, BRANDS, PRODUCTS, HERO_SLIDES, SEED_VERSION } from '@/lib/seed-data';
 
 const json = (data, status = 200) => NextResponse.json(data, { status });
@@ -178,8 +178,11 @@ async function handle(method, segments, request) {
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
     await (await col('signup_otps')).deleteMany({ email });
     await (await col('signup_otps')).insertOne({ email, code, expiresAt, used: false, createdAt: new Date() });
-    const { sent, devCode } = await sendOtpEmail(email, code, { purpose: 'verify your DHARA AADHVIKA account', expiryMinutes: 5 });
-    return json({ requiresOtp: true, email, message: sent ? 'OTP sent to your email.' : 'OTP generated (email service not configured — dev code shown).', devCode });
+    const { sent, devCode, error: mailError } = await sendOtpEmail(email, code, { purpose: 'verify your DHARA AADHVIKA account', expiryMinutes: 5 });
+    if (!sent && isEmailConfigured()) return err(`Could not send verification email${mailError ? ': ' + mailError : ''}`, 500);
+    const payload = { requiresOtp: true, email, message: sent ? 'OTP sent to your email.' : 'OTP generated (email service not configured — dev code shown).' };
+    if (!sent && devCode) payload.devCode = devCode;
+    return json(payload);
   }
   if (path === '/auth/verify-signup-otp' && method === 'POST') {
     const { email, code } = await request.json();
@@ -212,8 +215,11 @@ async function handle(method, segments, request) {
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
     await otps.deleteMany({ email });
     await otps.insertOne({ email, code, expiresAt, used: false, createdAt: new Date() });
-    const { sent, devCode } = await sendOtpEmail(email, code, { purpose: 'verify your DHARA AADHVIKA account', expiryMinutes: 5 });
-    return json({ ok: true, message: sent ? 'OTP resent to your email.' : 'OTP generated (email service not configured — dev code shown).', devCode });
+    const { sent, devCode, error: mailError } = await sendOtpEmail(email, code, { purpose: 'verify your DHARA AADHVIKA account', expiryMinutes: 5 });
+    if (!sent && isEmailConfigured()) return err(`Could not send verification email${mailError ? ': ' + mailError : ''}`, 500);
+    const payload = { ok: true, message: sent ? 'OTP resent to your email.' : 'OTP generated (email service not configured — dev code shown).' };
+    if (!sent && devCode) payload.devCode = devCode;
+    return json(payload);
   }
   if (path === '/auth/login' && method === 'POST') {
     const { email, password } = await request.json();
@@ -232,8 +238,11 @@ async function handle(method, segments, request) {
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await (await col('otps')).insertOne({ email, code, expiresAt, used: false, createdAt: new Date() });
-    console.log(`[OTP] ${email} -> ${code}`);
-    return json({ ok: true, devCode: code, message: 'OTP generated (email service not configured — dev code shown).' });
+    const { sent, devCode, error: mailError } = await sendOtpEmail(email, code, { purpose: 'sign in to your DHARA AADHVIKA account', expiryMinutes: 10 });
+    if (!sent && isEmailConfigured()) return err(`Could not send sign-in email${mailError ? ': ' + mailError : ''}`, 500);
+    const payload = { ok: true, message: sent ? 'OTP sent to your email.' : 'OTP generated (email service not configured — dev code shown).' };
+    if (!sent && devCode) payload.devCode = devCode;
+    return json(payload);
   }
   if (path === '/auth/otp/verify' && method === 'POST') {
     const { email, code } = await request.json();
@@ -259,18 +268,25 @@ async function handle(method, segments, request) {
     const { email } = await request.json();
     const users = await col('users');
     const u = await users.findOne({ email });
-    if (!u) return json({ ok: true, message: 'If this email exists, a reset link has been sent.' });
-    const token = uuid() + uuid();
+    // Always return ok to avoid leaking which emails are registered
+    if (!u) return json({ ok: true, message: 'If this email is registered, a reset code has been sent.' });
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
-    await (await col('pwresets')).insertOne({ email, token, used: false, expiresAt, createdAt: new Date() });
-    console.log(`[RESET] ${email} -> ${token}`);
-    return json({ ok: true, devToken: token, message: 'Reset token generated (email not configured — dev token shown).' });
+    await (await col('pwresets')).deleteMany({ email });
+    await (await col('pwresets')).insertOne({ email, token: code, used: false, expiresAt, createdAt: new Date() });
+    const { sent, devCode, error: mailError } = await sendPasswordResetEmail(email, code, { expiryMinutes: 30 });
+    if (!sent && isEmailConfigured()) return err(`Could not send reset email${mailError ? ': ' + mailError : ''}`, 500);
+    const payload = { ok: true, email, message: sent ? 'Reset code sent to your email.' : 'Reset code generated (email not configured — dev code shown).' };
+    if (!sent && devCode) payload.devToken = devCode;
+    return json(payload);
   }
   if (path === '/auth/reset' && method === 'POST') {
-    const { token, password } = await request.json();
+    const { email, token, password } = await request.json();
+    if (!token || !password) return err('token & password required');
     const rs = await col('pwresets');
-    const r = await rs.findOne({ token, used: false });
-    if (!r || new Date(r.expiresAt) < new Date()) return err('invalid or expired token', 401);
+    const query = email ? { email, token, used: false } : { token, used: false };
+    const r = await rs.findOne(query);
+    if (!r || new Date(r.expiresAt) < new Date()) return err('invalid or expired code', 401);
     await (await col('users')).updateOne({ email: r.email }, { $set: { password: hashPassword(password) } });
     await rs.updateOne({ _id: r._id }, { $set: { used: true } });
     return json({ ok: true });

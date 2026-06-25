@@ -1,7 +1,6 @@
-// Real SMTP email sending, with a safe fallback when SMTP isn't configured.
-// Mirrors the existing dev-mode pattern already used by /auth/otp and /auth/forgot
-// (console.log + return the code to the client) so behavior is unchanged until
-// SMTP_HOST/PORT/USER/PASS are set in the environment.
+// Real SMTP email sending via Gmail (or any SMTP host).
+// If SMTP is not configured we return { sent: false, devCode } so local dev
+// can still see the code; in production with SMTP configured we send a real email.
 import nodemailer from 'nodemailer';
 
 let transporter = null;
@@ -23,8 +22,20 @@ export function isEmailConfigured() {
   return Boolean(SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS);
 }
 
-// Returns { sent: boolean, devCode?: string } — never throws, so a misconfigured
-// or unreachable SMTP server never blocks signup/login flows.
+function brandedTemplate({ heading, intro, code, expiryMinutes, footer }) {
+  return `
+    <div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e5e5e5;border-radius:8px;background:#ffffff;">
+      <h2 style="color:#15803d;margin-top:0;letter-spacing:1px;">DHARA AADHVIKA</h2>
+      <p style="color:#1f2937;font-size:15px;margin:0 0 8px 0;"><strong>${heading}</strong></p>
+      <p style="color:#374151;font-size:14px;">${intro}</p>
+      <div style="font-size:30px;font-weight:bold;letter-spacing:8px;background:#f5f5f4;padding:18px;text-align:center;border-radius:6px;color:#15803d;margin:18px 0;">${code}</div>
+      <p style="color:#78716c;font-size:13px;margin:0 0 4px 0;">This code expires in ${expiryMinutes} minutes.</p>
+      <p style="color:#78716c;font-size:12px;margin-top:18px;">${footer || `If you didn't request this, you can safely ignore this email.`}</p>
+      <hr style="border:none;border-top:1px solid #e5e5e5;margin:22px 0 12px 0;" />
+      <p style="color:#9ca3af;font-size:11px;text-align:center;margin:0;">DHARA AADHVIKA — Pure. Honest. Rooted.</p>
+    </div>`;
+}
+
 export async function sendOtpEmail(email, code, { purpose = 'verify your account', expiryMinutes = 5 } = {}) {
   const t = getTransporter();
   if (!t) {
@@ -36,17 +47,42 @@ export async function sendOtpEmail(email, code, { purpose = 'verify your account
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
       to: email,
       subject: `Your DHARA AADHVIKA verification code: ${code}`,
-      html: `
-        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px;border:1px solid #e5e5e5;border-radius:8px;">
-          <h2 style="color:#15803d;margin-top:0;">DHARA AADHVIKA</h2>
-          <p>Use the code below to ${purpose}. It expires in ${expiryMinutes} minutes.</p>
-          <div style="font-size:32px;font-weight:bold;letter-spacing:6px;background:#f5f5f4;padding:16px;text-align:center;border-radius:6px;color:#15803d;">${code}</div>
-          <p style="color:#78716c;font-size:13px;margin-top:20px;">If you didn't request this, you can safely ignore this email.</p>
-        </div>`,
+      html: brandedTemplate({
+        heading: 'Verify your email',
+        intro: `Use the code below to ${purpose}.`,
+        code,
+        expiryMinutes,
+      }),
     });
     return { sent: true };
   } catch (e) {
-    console.error('[OTP-EMAIL] send failed, falling back to dev code:', e.message);
+    console.error('[OTP-EMAIL] send failed:', e.message);
+    return { sent: false, error: e.message };
+  }
+}
+
+export async function sendPasswordResetEmail(email, code, { expiryMinutes = 30 } = {}) {
+  const t = getTransporter();
+  if (!t) {
+    console.log(`[RESET-EMAIL] (SMTP not configured) ${email} -> ${code}`);
     return { sent: false, devCode: code };
+  }
+  try {
+    await t.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to: email,
+      subject: `Your DHARA AADHVIKA password reset code: ${code}`,
+      html: brandedTemplate({
+        heading: 'Reset your password',
+        intro: `Use the code below to reset your DHARA AADHVIKA account password.`,
+        code,
+        expiryMinutes,
+        footer: `If you didn't request a password reset, you can safely ignore this email — your password will stay the same.`,
+      }),
+    });
+    return { sent: true };
+  } catch (e) {
+    console.error('[RESET-EMAIL] send failed:', e.message);
+    return { sent: false, error: e.message };
   }
 }
