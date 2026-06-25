@@ -43,6 +43,8 @@ export async function sendOtpEmail(email, code, { purpose = 'verify your account
     return { sent: false, devCode: code };
   }
   try {
+    await t.verify();
+console.log("SMTP Connected");
     await t.sendMail({
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
       to: email,
