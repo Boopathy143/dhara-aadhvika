@@ -31,3 +31,10 @@ Import a Next.js ecommerce project, fix build errors, deploy and incrementally a
 - P2 Tiptap WYSIWYG for CMS (currently plain-text with newlines + preview)
 - P2 WhatsApp order notification ping
 
+
+## 2026-06-25 — Phase 4 Customer Ledger
+- New collection `ledger_entries` (manual debit/credit adjustments)
+- Endpoints: `GET /admin/ledger/users`, `GET /admin/ledger/users/:id?from=&to=`, `POST /admin/ledger/entries`, `DELETE /admin/ledger/entries/:id`
+- Auto-derived entries from orders (debit on place, credit on COD-delivered / UPI-verified, credit on refund per item)
+- Admin Ledger tab: customer list with outstanding sorted desc; per-customer statement with date filter, running balance, manual-entry dialog, Print / CSV export / PDF export (jsPDF + autoTable, "Rs." prefix)
+- E2E verified — 2 customers, ₹1721 outstanding after manual ₹100 credit, date filter narrows entries

@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Trash2, Pencil, Plus, IndianRupee, Package, ShoppingBag, Users, Tag, X, CheckCircle2, XCircle, Maximize2, Download, ZoomIn, ZoomOut, FileText, ExternalLink, Settings, Image as ImageIcon, Truck } from 'lucide-react';
+import { Trash2, Pencil, Plus, IndianRupee, Package, ShoppingBag, Users, Tag, X, CheckCircle2, XCircle, Maximize2, Download, ZoomIn, ZoomOut, FileText, ExternalLink, Settings, Image as ImageIcon, Truck, Wallet } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { toast } from 'sonner';
 import { UNIT_OPTIONS, formatPack, inr } from '@/lib/format';
@@ -21,6 +21,7 @@ import AdminCMS from './_cms';
 import AdminBanners from './_banners';
 import AdminUsersPanel from './_users';
 import AdminDelivery from './_delivery';
+import AdminLedger from './_ledger';
 
 const empty = {
   name: '', brand: '', category: '', price: 0, mrp: 0, image: '', description: '',
@@ -177,6 +178,7 @@ export default function AdminPage() {
             <TabsTrigger value="reviews" data-testid="tab-reviews">Reviews</TabsTrigger>
             <TabsTrigger value="returns" data-testid="tab-returns">Returns{returns?.items?.length ? ` (${returns.items.length})` : ''}</TabsTrigger>
             <TabsTrigger value="delivery" data-testid="tab-delivery"><Truck className="h-3.5 w-3.5 mr-1.5" />Delivery</TabsTrigger>
+            <TabsTrigger value="ledger" data-testid="tab-ledger"><Wallet className="h-3.5 w-3.5 mr-1.5" />Ledger</TabsTrigger>
             <TabsTrigger value="banners" data-testid="tab-banners"><ImageIcon className="h-3.5 w-3.5 mr-1.5" />Banners</TabsTrigger>
             <TabsTrigger value="cms" data-testid="tab-cms"><Settings className="h-3.5 w-3.5 mr-1.5" />Site Settings</TabsTrigger>
           </TabsList>
@@ -340,6 +342,10 @@ export default function AdminPage() {
 
           <TabsContent value="delivery" className="mt-4">
             <AdminDelivery />
+          </TabsContent>
+
+          <TabsContent value="ledger" className="mt-4">
+            <AdminLedger />
           </TabsContent>
 
           <TabsContent value="cms" className="mt-4">

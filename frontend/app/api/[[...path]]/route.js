@@ -967,6 +967,162 @@ async function handle(method, segments, request) {
     return json({ ok: true });
   }
 
+  // ---------- CUSTOMER LEDGER (Phase 4) ----------
+  // Ledger is derived on-the-fly from `orders` + `returns` + manual `ledger_entries`.
+  // No duplicate writes — orders are the source of truth.
+  if (path === '/admin/ledger/users' && method === 'GET') {
+    await requireAdmin();
+    const usersCol = await col('users');
+    const ordersCol = await col('orders');
+    const entriesCol = await col('ledger_entries');
+    const users = await usersCol.find({}, { projection: { password: 0 } }).toArray();
+    const out = [];
+    for (const u of users) {
+      const orders = await ordersCol.find({ userId: u.id }).toArray();
+      let debit = 0, credit = 0, refunded = 0;
+      let lifetimeOrders = orders.length;
+      let activeOrders = 0;
+      for (const o of orders) {
+        if (o.status === 'cancelled' || o.status === 'payment_rejected') continue;
+        activeOrders += 1;
+        debit += o.total || 0;
+        // Customer paid?
+        const paid = o.paymentMethod === 'COD' ? o.status === 'delivered' : !!o.paymentVerified;
+        if (paid) credit += o.total || 0;
+        // Refunds (per returned item)
+        for (const it of o.items || []) {
+          if (it.returnRequest?.refundStatus === 'refunded') {
+            credit += it.total || 0;
+            refunded += it.total || 0;
+          }
+        }
+      }
+      const manual = await entriesCol.find({ userId: u.id }).toArray();
+      for (const m of manual) {
+        if (m.type === 'debit') debit += m.amount || 0;
+        else if (m.type === 'credit') credit += m.amount || 0;
+      }
+      out.push({
+        id: u.id, name: u.name, email: u.email,
+        active: u.active !== false,
+        lifetimeOrders, activeOrders,
+        totalBilled: debit, totalReceived: credit, totalRefunded: refunded,
+        outstanding: Math.round((debit - credit) * 100) / 100,
+      });
+    }
+    out.sort((a, b) => b.outstanding - a.outstanding);
+    return json({ items: out });
+  }
+
+  if (path.startsWith('/admin/ledger/users/') && method === 'GET') {
+    await requireAdmin();
+    const userId = segments[3];
+    const from = url.searchParams.get('from') ? new Date(url.searchParams.get('from')) : null;
+    const to = url.searchParams.get('to') ? new Date(url.searchParams.get('to') + 'T23:59:59') : null;
+    const u = await (await col('users')).findOne({ id: userId }, { projection: { password: 0, _id: 0 } });
+    if (!u) return err('user not found', 404);
+    const ordersCol = await col('orders');
+    const orders = await ordersCol.find({ userId }).sort({ createdAt: 1 }).toArray();
+    const entries = [];
+    for (const o of orders) {
+      if (o.status === 'cancelled' || o.status === 'payment_rejected') continue;
+      entries.push({
+        id: `ord-${o.id}`,
+        date: o.createdAt,
+        type: 'debit', kind: 'order',
+        ref: o.id,
+        description: `Order ${o.id} • ${o.items?.length || 0} items • ${o.paymentMethod}`,
+        amount: o.total || 0,
+        meta: { status: o.status },
+      });
+      const paid = o.paymentMethod === 'COD' ? o.status === 'delivered' : !!o.paymentVerified;
+      if (paid) {
+        // Best-effort payment date: order's last update or now
+        const payDate = (o.updates && o.updates[o.updates.length - 1]?.at) || o.createdAt;
+        entries.push({
+          id: `pay-${o.id}`,
+          date: payDate,
+          type: 'credit', kind: 'payment',
+          ref: o.id,
+          description: `Payment received for ${o.id} • ${o.paymentMethod === 'COD' ? 'COD on delivery' : 'UPI verified'}`,
+          amount: o.total || 0,
+        });
+      }
+      for (const it of (o.items || [])) {
+        if (it.returnRequest?.refundStatus === 'refunded') {
+          entries.push({
+            id: `ref-${o.id}-${it.productId}`,
+            date: it.returnRequest.updatedAt || it.returnRequest.createdAt || o.createdAt,
+            type: 'credit', kind: 'refund',
+            ref: o.id,
+            description: `Refund for ${it.name} (Order ${o.id})`,
+            amount: it.total || 0,
+          });
+        }
+      }
+    }
+    const manual = await (await col('ledger_entries')).find({ userId }).toArray();
+    for (const m of manual) {
+      entries.push({
+        id: m.id, date: m.date || m.createdAt,
+        type: m.type, kind: 'manual',
+        ref: null,
+        description: m.description || (m.type === 'debit' ? 'Manual debit' : 'Manual credit'),
+        amount: m.amount || 0,
+        meta: { manual: true },
+      });
+    }
+    entries.sort((a, b) => new Date(a.date) - new Date(b.date));
+    const filtered = entries.filter(e => (!from || new Date(e.date) >= from) && (!to || new Date(e.date) <= to));
+    // Running balance
+    let running = 0;
+    let openingBalance = 0;
+    if (from) {
+      for (const e of entries) {
+        if (new Date(e.date) < from) {
+          if (e.type === 'debit') openingBalance += e.amount;
+          else openingBalance -= e.amount;
+        }
+      }
+    }
+    running = openingBalance;
+    const rows = filtered.map(e => {
+      if (e.type === 'debit') running += e.amount; else running -= e.amount;
+      return { ...e, balance: Math.round(running * 100) / 100 };
+    });
+    const totals = filtered.reduce((acc, e) => {
+      if (e.type === 'debit') acc.debit += e.amount;
+      else acc.credit += e.amount;
+      return acc;
+    }, { debit: 0, credit: 0 });
+    return json({
+      user: { id: u.id, name: u.name, email: u.email, active: u.active !== false, createdAt: u.createdAt },
+      openingBalance: Math.round(openingBalance * 100) / 100,
+      totals: { debit: totals.debit, credit: totals.credit, outstanding: Math.round((openingBalance + totals.debit - totals.credit) * 100) / 100 },
+      entries: rows,
+      filter: { from: from ? from.toISOString() : null, to: to ? to.toISOString() : null },
+    });
+  }
+
+  if (path === '/admin/ledger/entries' && method === 'POST') {
+    await requireAdmin();
+    const { userId, type, amount, description, date } = await request.json();
+    if (!userId || !['debit', 'credit'].includes(type) || !Number(amount)) return err('userId, type (debit|credit), amount required');
+    const entry = {
+      id: uuid(), userId, type, amount: Number(amount),
+      description: description || '', date: date ? new Date(date) : new Date(),
+      createdAt: new Date(),
+    };
+    await (await col('ledger_entries')).insertOne(entry);
+    const { _id, ...r } = entry;
+    return json(r);
+  }
+  if (path.startsWith('/admin/ledger/entries/') && method === 'DELETE') {
+    await requireAdmin();
+    await (await col('ledger_entries')).deleteOne({ id: segments[3] });
+    return json({ ok: true });
+  }
+
   return err('not found: ' + method + ' ' + path, 404);
 }
 
