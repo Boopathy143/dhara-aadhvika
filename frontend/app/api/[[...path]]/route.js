@@ -8,12 +8,34 @@ import { CATEGORIES, BRANDS, PRODUCTS, HERO_SLIDES, SEED_VERSION } from '@/lib/s
 const json = (data, status = 200) => NextResponse.json(data, { status });
 const err = (message, status = 400) => NextResponse.json({ error: message }, { status });
 
+// Seed a handful of nearby PIN codes around the Erode store (638502) so the
+// distance-based delivery calculator works out of the box. Admin can add many
+// more (or bulk-import) from Admin → Delivery. Idempotent — only seeds if
+// the collection is empty.
+async function ensurePincodesSeeded() {
+  const pins = await col('pincodes');
+  const count = await pins.estimatedDocumentCount();
+  if (count > 0) return;
+  await pins.bulkWrite([
+    { pincode: '638502', distanceKm: 0,   deliverable: true, city: 'Anthiyur',         state: 'Tamil Nadu' },
+    { pincode: '638501', distanceKm: 3,   deliverable: true, city: 'Anthiyur RS',      state: 'Tamil Nadu' },
+    { pincode: '638503', distanceKm: 6,   deliverable: true, city: 'Bhavani',          state: 'Tamil Nadu' },
+    { pincode: '638504', distanceKm: 9,   deliverable: true, city: 'Komarapalayam',    state: 'Tamil Nadu' },
+    { pincode: '638505', distanceKm: 12,  deliverable: true, city: 'Sathyamangalam',   state: 'Tamil Nadu' },
+    { pincode: '638001', distanceKm: 18,  deliverable: true, city: 'Erode',            state: 'Tamil Nadu' },
+    { pincode: '600001', distanceKm: 450, deliverable: true, city: 'Chennai',          state: 'Tamil Nadu' },
+    { pincode: '560001', distanceKm: 350, deliverable: true, city: 'Bengaluru',        state: 'Karnataka' },
+  ].map(p => ({ updateOne: { filter: { pincode: p.pincode }, update: { $setOnInsert: { ...p, createdAt: new Date() } }, upsert: true } })));
+}
+
 async function ensureSeeded() {
   if (global._seedDone) return;
   if (global._seedPromise) return global._seedPromise;
   global._seedPromise = (async () => {
     const meta = await col('_meta');
     try { await meta.createIndex({ key: 1 }, { unique: true }); } catch {}
+    // Always ensure pincodes are populated (idempotent — independent of main seed lock)
+    await ensurePincodesSeeded();
     const existing = await meta.findOne({ key: 'seedVersion' });
     if (existing && existing.value === SEED_VERSION) { global._seedDone = true; return; }
     // Try to acquire lock atomically
@@ -66,6 +88,8 @@ async function ensureSeeded() {
     { id: uuid(), code: 'PURE500', discountFlat: 500, minOrder: 2500, active: true, description: '₹500 off on orders above ₹2500' },
     { id: uuid(), code: 'NEWLEAF', discountPct: 15, minOrder: 1000, active: true, description: '15% off above ₹1000' },
   ]);
+  // Seed inside main seed lock as well, for fresh installs.
+  await ensurePincodesSeeded();
   await meta.updateOne({ key: 'seedVersion' }, { $set: { value: SEED_VERSION } }, { upsert: true });
     global._seedDone = true;
   })();
@@ -458,7 +482,10 @@ async function handle(method, segments, request) {
       }
     }
     const tax = Math.round((subtotal - discount) * 0.05);
-    const shipping = subtotal > 999 ? 0 : 49;
+    // PIN-code distance-based delivery rate
+    const dq = await quoteDelivery(address.pincode, subtotal);
+    if (!dq.deliverable) return err(dq.message || 'Sorry, we cannot deliver to this PIN code.', 400);
+    const shipping = dq.charge || 0;
     const total = subtotal - discount + tax + shipping;
     const id = 'DA' + Date.now().toString(36).toUpperCase() + uuid().slice(0, 4).toUpperCase();
 
@@ -484,6 +511,7 @@ async function handle(method, segments, request) {
       items, address, subtotal, discount, tax, shipping, total,
       couponCode: couponCode || null, status, paymentMethod, paymentVerified,
       paymentDetails: paymentRecord,
+      deliveryQuote: dq,
       createdAt: new Date(),
       updates: [{ status, at: new Date() }],
     };
@@ -622,9 +650,15 @@ async function handle(method, segments, request) {
       }
     }
     const tax = Math.round((subtotal - discount) * 0.05);
-    const shipping = subtotal > 999 ? 0 : 49;
+    // PIN-code distance-based delivery rate (best-effort: only when pincode supplied)
+    let shipping = 0, deliveryQuote = null;
+    if (body.pincode) {
+      deliveryQuote = await quoteDelivery(body.pincode, subtotal);
+      if (!deliveryQuote.deliverable) return json({ items, subtotal, discount, tax, shipping: 0, total: subtotal - discount + tax, couponCode: validCoupon, deliveryQuote });
+      shipping = deliveryQuote.charge || 0;
+    }
     const total = subtotal - discount + tax + shipping;
-    return json({ items, subtotal, discount, tax, shipping, total, couponCode: validCoupon });
+    return json({ items, subtotal, discount, tax, shipping, total, couponCode: validCoupon, deliveryQuote });
   }
 
   if (path === '/admin/orders' && method === 'GET') {
@@ -702,6 +736,116 @@ async function handle(method, segments, request) {
     const { email } = await request.json();
     if (!email) return err('email required');
     await (await col('newsletter')).updateOne({ email }, { $set: { email, createdAt: new Date() } }, { upsert: true });
+    return json({ ok: true });
+  }
+
+  // ---------- DELIVERY (PIN-code distance based) ----------
+  // Settings doc { storePincode, freeDeliveryThreshold, slabs, fallbackPolicy }
+  // slabs is sorted, each: { fromKm, toKm, charge, label }
+  // fallbackPolicy: 'block' (default) | 'flat:<rs>'
+  // pincodes collection: { pincode, distanceKm, deliverable, city, state }
+  const DEFAULT_DELIVERY = {
+    storePincode: '638502',
+    freeDeliveryThreshold: 999,
+    slabs: [
+      { fromKm: 0, toKm: 5, charge: 30, label: '0–5 KM' },
+      { fromKm: 5, toKm: 10, charge: 50, label: '5–10 KM' },
+      { fromKm: 10, toKm: 15, charge: 70, label: '10–15 KM' },
+      { fromKm: 15, toKm: 20, charge: 100, label: '15–20 KM' },
+    ],
+    notDeliverableLabel: 'Beyond 20 KM',
+    fallbackPolicy: 'block',
+  };
+  async function getDeliverySettings() {
+    const doc = await (await col('delivery_settings')).findOne({ key: 'main' });
+    return { ...DEFAULT_DELIVERY, ...(doc?.value || {}) };
+  }
+  async function quoteDelivery(pincode, subtotal) {
+    const s = await getDeliverySettings();
+    const trimmed = (pincode || '').trim();
+    let pin = await (await col('pincodes')).findOne({ pincode: trimmed });
+    // Same pincode as store → 0 km
+    if (!pin && trimmed === s.storePincode) {
+      pin = { pincode: trimmed, distanceKm: 0, deliverable: true, city: 'Store location' };
+    }
+    if (!pin) {
+      if (s.fallbackPolicy && s.fallbackPolicy.startsWith('flat:')) {
+        const charge = Number(s.fallbackPolicy.split(':')[1]) || 0;
+        return { deliverable: true, distanceKm: null, charge, slab: { label: 'Outside zones — flat rate' }, message: 'Delivery charge based on flat fallback rate.' };
+      }
+      return { deliverable: false, message: `PIN ${trimmed || '—'} is outside our delivery zone. Please contact support for special arrangements.` };
+    }
+    if (pin.deliverable === false) {
+      return { deliverable: false, distanceKm: pin.distanceKm, message: `Sorry — we don't currently deliver to ${pin.city || pin.pincode}.` };
+    }
+    const slab = (s.slabs || []).find(sl => pin.distanceKm >= sl.fromKm && pin.distanceKm < sl.toKm);
+    if (!slab) {
+      return { deliverable: false, distanceKm: pin.distanceKm, message: `${pin.city || pin.pincode} is ${pin.distanceKm} km from our store — ${s.notDeliverableLabel || 'beyond delivery range'}.` };
+    }
+    const freeFromSubtotal = (s.freeDeliveryThreshold || 0) > 0 && Number(subtotal || 0) >= s.freeDeliveryThreshold;
+    return {
+      deliverable: true,
+      distanceKm: pin.distanceKm,
+      city: pin.city, state: pin.state,
+      slab,
+      charge: freeFromSubtotal ? 0 : slab.charge,
+      free: freeFromSubtotal,
+      message: freeFromSubtotal ? `FREE delivery on orders above ₹${s.freeDeliveryThreshold}.` : `${pin.distanceKm} km from store — ${slab.label} slab.`,
+    };
+  }
+
+  if (path === '/delivery/quote' && method === 'GET') {
+    const pincode = url.searchParams.get('pincode');
+    const subtotal = Number(url.searchParams.get('subtotal') || 0);
+    if (!pincode) return err('pincode required');
+    const q = await quoteDelivery(pincode, subtotal);
+    return json(q);
+  }
+  if (path === '/admin/delivery' && method === 'GET') {
+    await requireAdmin();
+    const s = await getDeliverySettings();
+    const pincodes = await (await col('pincodes')).find({}).sort({ distanceKm: 1, pincode: 1 }).limit(1000).toArray();
+    return json({ settings: s, pincodes: pincodes.map(({ _id, ...r }) => r) });
+  }
+  if (path === '/admin/delivery' && method === 'PUT') {
+    await requireAdmin();
+    const body = await request.json();
+    await (await col('delivery_settings')).updateOne(
+      { key: 'main' },
+      { $set: { key: 'main', value: body, updatedAt: new Date() } },
+      { upsert: true },
+    );
+    return json({ ok: true });
+  }
+  if (path === '/admin/delivery/pincodes' && method === 'POST') {
+    await requireAdmin();
+    const body = await request.json();
+    // Accept either a single { pincode, distanceKm, deliverable, city, state }
+    // or { items: [...] } for bulk insert.
+    const items = Array.isArray(body.items) ? body.items : [body];
+    const ops = items
+      .filter(p => p && p.pincode)
+      .map(p => ({
+        updateOne: {
+          filter: { pincode: String(p.pincode).trim() },
+          update: { $set: {
+            pincode: String(p.pincode).trim(),
+            distanceKm: Number(p.distanceKm) || 0,
+            deliverable: p.deliverable !== false,
+            city: p.city || '',
+            state: p.state || '',
+            updatedAt: new Date(),
+          } },
+          upsert: true,
+        },
+      }));
+    if (!ops.length) return err('no pincode rows');
+    const result = await (await col('pincodes')).bulkWrite(ops);
+    return json({ ok: true, modified: result.modifiedCount, upserted: result.upsertedCount });
+  }
+  if (path.startsWith('/admin/delivery/pincodes/') && method === 'DELETE') {
+    await requireAdmin();
+    await (await col('pincodes')).deleteOne({ pincode: segments[3] });
     return json({ ok: true });
   }
 

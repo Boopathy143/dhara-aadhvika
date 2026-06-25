@@ -25,11 +25,26 @@ export default function CheckoutPage() {
   const [placing, setPlacing] = useState(false);
   const [placedOrder, setPlacedOrder] = useState(null);
   const [saveAddress, setSaveAddress] = useState(true);
+  const [delivery, setDelivery] = useState(null);  // { deliverable, charge, distanceKm, slab, free, message }
+  const [deliveryLoading, setDeliveryLoading] = useState(false);
+
+  // Re-quote whenever the pincode or cart subtotal changes.
+  useEffect(() => {
+    const pc = (addr.pincode || '').trim();
+    if (pc.length !== 6) { setDelivery(null); return; }
+    let cancelled = false;
+    setDeliveryLoading(true);
+    fetch(`/api/delivery/quote?pincode=${encodeURIComponent(pc)}&subtotal=${cart?.subtotal || 0}`)
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setDelivery(d); })
+      .finally(() => { if (!cancelled) setDeliveryLoading(false); });
+    return () => { cancelled = true; };
+  }, [addr.pincode, cart?.subtotal]);
 
   if (!me?.user) return <><Header /><main className="container mx-auto px-4 py-16 text-center"><h1 className="text-2xl font-bold">Sign in to checkout</h1><Button asChild className="mt-4 bg-emerald-700"><Link href="/login">Sign in</Link></Button></main><Footer /></>;
 
-  const useSavedAddress = (a) => setAddr({ name: a.name, phone: a.phone, line1: a.line1, city: a.city, state: a.state, pincode: a.pincode });
-  const addrValid = () => addr.name && addr.phone && addr.line1 && addr.city && addr.pincode;
+  const applySavedAddress = (a) => setAddr({ name: a.name, phone: a.phone, line1: a.line1, city: a.city, state: a.state, pincode: a.pincode });
+  const addrValid = () => addr.name && addr.phone && addr.line1 && addr.city && addr.pincode && addr.pincode.length === 6 && delivery?.deliverable;
   const applyCoupon = async () => {
     const res = await fetch('/api/coupons/validate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: coupon, subtotal: cart?.subtotal || 0 }) });
     const d = await res.json();
@@ -40,7 +55,7 @@ export default function CheckoutPage() {
   const submitOrder = async (extraPayload = {}) => {
     if (!addrValid()) { toast.error('Please fill all address fields'); return null; }
     setPlacing(true);
-    if (saveAddress) { try { await fetch('/api/addresses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(addr) }); } catch {} }
+    if (saveAddress) { try { await fetch('/api/addresses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(addr) }); } catch (e) { /* non-blocking */ } }
     const res = await fetch('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: addr, couponCode: appliedCoupon?.code, paymentMethod, ...extraPayload }) });
     const d = await res.json();
     setPlacing(false);
@@ -74,7 +89,7 @@ export default function CheckoutPage() {
   const discount = appliedCoupon?.discount || 0;
   const subtotal = cart?.subtotal || 0;
   const tax = Math.round((subtotal - discount) * 0.05);
-  const shipping = subtotal > 999 ? 0 : subtotal === 0 ? 0 : 49;
+  const shipping = (addr.pincode?.length === 6 && delivery?.deliverable) ? (delivery.charge || 0) : 0;
   const total = subtotal - discount + tax + shipping;
   const breakdown = { subtotal, discount, tax, shipping, total };
 
@@ -92,7 +107,7 @@ export default function CheckoutPage() {
             {addrData?.items?.length > 0 && (<Card><CardContent className="p-5 space-y-3">
               <h2 className="font-semibold text-lg">Saved Addresses</h2>
               <div className="grid sm:grid-cols-2 gap-3">{addrData.items.map(a => (
-                <button key={a.id} onClick={() => useSavedAddress(a)} className="text-left p-3 rounded-md border border-border hover:border-emerald-700 transition">
+                <button key={a.id} onClick={() => applySavedAddress(a)} className="text-left p-3 rounded-md border border-border hover:border-emerald-700 transition">
                   <div className="font-medium text-sm">{a.name}</div><div className="text-xs text-muted-foreground">{a.line1}, {a.city} - {a.pincode}</div>
                 </button>
               ))}</div>
@@ -105,9 +120,30 @@ export default function CheckoutPage() {
                 <div className="sm:col-span-2"><Label>Address</Label><Input value={addr.line1} onChange={e => setAddr({ ...addr, line1: e.target.value })} placeholder="House no., Street, Area" /></div>
                 <div><Label>City</Label><Input value={addr.city} onChange={e => setAddr({ ...addr, city: e.target.value })} /></div>
                 <div><Label>State</Label><Input value={addr.state} onChange={e => setAddr({ ...addr, state: e.target.value })} /></div>
-                <div><Label>Pincode</Label><Input value={addr.pincode} onChange={e => setAddr({ ...addr, pincode: e.target.value })} /></div>
+                <div><Label>Pincode</Label><Input maxLength={6} value={addr.pincode} onChange={e => setAddr({ ...addr, pincode: e.target.value.replace(/\D/g, '').slice(0, 6) })} data-testid="checkout-pincode-input" /></div>
               </div>
               <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={saveAddress} onChange={e => setSaveAddress(e.target.checked)} />Save this address for future orders</label>
+              {addr.pincode?.length === 6 && (
+                deliveryLoading ? (
+                  <div className="text-sm text-muted-foreground">Calculating delivery rate…</div>
+                ) : delivery ? (
+                  delivery.deliverable ? (
+                    <div className="rounded-md border border-emerald-700/40 bg-emerald-700/5 px-3 py-2 text-sm" data-testid="delivery-quote-ok">
+                      <div className="font-medium text-emerald-800 dark:text-emerald-300">
+                        Delivering to {delivery.city || `PIN ${addr.pincode}`}{delivery.distanceKm != null ? ` • ${delivery.distanceKm} km from store` : ''}
+                      </div>
+                      <div className="text-xs text-emerald-900/80 dark:text-emerald-200/80">
+                        {delivery.free ? `FREE delivery (order above ₹999)` : `${delivery.slab?.label || ''} slab — ₹${delivery.charge} delivery`}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-red-500/40 bg-red-500/5 px-3 py-2 text-sm" data-testid="delivery-quote-block">
+                      <div className="font-medium text-red-700">PIN {addr.pincode} is outside our delivery zone</div>
+                      <div className="text-xs text-red-600/80">{delivery.message}</div>
+                    </div>
+                  )
+                ) : null
+              )}
             </CardContent></Card>
             <Card><CardContent className="p-5 space-y-3">
               <h2 className="font-semibold text-lg flex items-center gap-2"><Wallet className="h-5 w-5 text-emerald-700" />Payment Method</h2>
@@ -137,11 +173,11 @@ export default function CheckoutPage() {
               <div className="flex justify-between"><span>Subtotal</span><span>₹{subtotal.toLocaleString('en-IN')}</span></div>
               {discount > 0 && <div className="flex justify-between text-emerald-700"><span>Coupon ({appliedCoupon.code})</span><span>-₹{discount.toLocaleString('en-IN')}</span></div>}
               <div className="flex justify-between"><span>Tax (5% GST)</span><span>₹{tax.toLocaleString('en-IN')}</span></div>
-              <div className="flex justify-between"><span>Shipping</span><span>{shipping === 0 ? 'FREE' : `₹${shipping}`}</span></div>
+              <div className="flex justify-between"><span>Shipping{delivery?.distanceKm != null ? ` (${delivery.distanceKm} km)` : ''}</span><span data-testid="checkout-shipping">{addr.pincode?.length === 6 ? (delivery?.deliverable ? (shipping === 0 ? 'FREE' : `₹${shipping}`) : <span className="text-red-600 text-xs">N/A</span>) : <span className="text-xs text-muted-foreground">Enter PIN</span>}</span></div>
               <div className="flex justify-between font-bold text-lg pt-2 border-t border-border"><span>Total</span><span>₹{total.toLocaleString('en-IN')}</span></div>
             </div>
             {paymentMethod === 'COD' ? (
-              <Button onClick={placeCod} disabled={placing || subtotal === 0} className="w-full bg-gradient-to-r from-emerald-700 to-amber-700 text-white">{placing ? 'Placing…' : 'Place Order (COD)'}</Button>
+              <Button onClick={placeCod} disabled={placing || subtotal === 0 || !addrValid()} className="w-full bg-gradient-to-r from-emerald-700 to-amber-700 text-white" data-testid="place-cod-btn">{placing ? 'Placing…' : 'Place Order (COD)'}</Button>
             ) : (
               <div className="text-xs text-center text-muted-foreground p-3 rounded-md bg-secondary/50">Use the UPI panel on the left to pay and submit verification.</div>
             )}
