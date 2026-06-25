@@ -28,6 +28,63 @@ async function ensurePincodesSeeded() {
   ].map(p => ({ updateOne: { filter: { pincode: p.pincode }, update: { $setOnInsert: { ...p, createdAt: new Date() } }, upsert: true } })));
 }
 
+// ---------- DELIVERY HELPERS (module-level to avoid TDZ inside handle()) ----------
+// settings: { storePincode, freeDeliveryThreshold, slabs, fallbackPolicy, notDeliverableLabel }
+// slabs entry: { fromKm, toKm, charge, label }
+// fallbackPolicy: 'block' (default) | 'flat:<rs>'
+// pincodes collection: { pincode, distanceKm, deliverable, city, state }
+const DEFAULT_DELIVERY = {
+  storePincode: '638502',
+  freeDeliveryThreshold: 999,
+  slabs: [
+    { fromKm: 0, toKm: 5, charge: 30, label: '0–5 KM' },
+    { fromKm: 5, toKm: 10, charge: 50, label: '5–10 KM' },
+    { fromKm: 10, toKm: 15, charge: 70, label: '10–15 KM' },
+    { fromKm: 15, toKm: 20, charge: 100, label: '15–20 KM' },
+  ],
+  notDeliverableLabel: 'Beyond 20 KM',
+  fallbackPolicy: 'block',
+};
+
+async function getDeliverySettings() {
+  const doc = await (await col('delivery_settings')).findOne({ key: 'main' });
+  return { ...DEFAULT_DELIVERY, ...(doc?.value || {}) };
+}
+
+async function quoteDelivery(pincode, subtotal) {
+  const s = await getDeliverySettings();
+  const trimmed = (pincode || '').trim();
+  let pin = await (await col('pincodes')).findOne({ pincode: trimmed });
+  // Same pincode as store → 0 km
+  if (!pin && trimmed === s.storePincode) {
+    pin = { pincode: trimmed, distanceKm: 0, deliverable: true, city: 'Store location' };
+  }
+  if (!pin) {
+    if (s.fallbackPolicy && s.fallbackPolicy.startsWith('flat:')) {
+      const charge = Number(s.fallbackPolicy.split(':')[1]) || 0;
+      return { deliverable: true, distanceKm: null, charge, slab: { label: 'Outside zones — flat rate' }, message: 'Delivery charge based on flat fallback rate.' };
+    }
+    return { deliverable: false, message: `PIN ${trimmed || '—'} is outside our delivery zone. Please contact support for special arrangements.` };
+  }
+  if (pin.deliverable === false) {
+    return { deliverable: false, distanceKm: pin.distanceKm, message: `Sorry — we don't currently deliver to ${pin.city || pin.pincode}.` };
+  }
+  const slab = (s.slabs || []).find(sl => pin.distanceKm >= sl.fromKm && pin.distanceKm < sl.toKm);
+  if (!slab) {
+    return { deliverable: false, distanceKm: pin.distanceKm, message: `${pin.city || pin.pincode} is ${pin.distanceKm} km from our store — ${s.notDeliverableLabel || 'beyond delivery range'}.` };
+  }
+  const freeFromSubtotal = (s.freeDeliveryThreshold || 0) > 0 && Number(subtotal || 0) >= s.freeDeliveryThreshold;
+  return {
+    deliverable: true,
+    distanceKm: pin.distanceKm,
+    city: pin.city, state: pin.state,
+    slab,
+    charge: freeFromSubtotal ? 0 : slab.charge,
+    free: freeFromSubtotal,
+    message: freeFromSubtotal ? `FREE delivery on orders above ₹${s.freeDeliveryThreshold}.` : `${pin.distanceKm} km from store — ${slab.label} slab.`,
+  };
+}
+
 async function ensureSeeded() {
   if (global._seedDone) return;
   if (global._seedPromise) return global._seedPromise;
@@ -740,59 +797,9 @@ async function handle(method, segments, request) {
   }
 
   // ---------- DELIVERY (PIN-code distance based) ----------
-  // Settings doc { storePincode, freeDeliveryThreshold, slabs, fallbackPolicy }
-  // slabs is sorted, each: { fromKm, toKm, charge, label }
-  // fallbackPolicy: 'block' (default) | 'flat:<rs>'
-  // pincodes collection: { pincode, distanceKm, deliverable, city, state }
-  const DEFAULT_DELIVERY = {
-    storePincode: '638502',
-    freeDeliveryThreshold: 999,
-    slabs: [
-      { fromKm: 0, toKm: 5, charge: 30, label: '0–5 KM' },
-      { fromKm: 5, toKm: 10, charge: 50, label: '5–10 KM' },
-      { fromKm: 10, toKm: 15, charge: 70, label: '10–15 KM' },
-      { fromKm: 15, toKm: 20, charge: 100, label: '15–20 KM' },
-    ],
-    notDeliverableLabel: 'Beyond 20 KM',
-    fallbackPolicy: 'block',
-  };
-  async function getDeliverySettings() {
-    const doc = await (await col('delivery_settings')).findOne({ key: 'main' });
-    return { ...DEFAULT_DELIVERY, ...(doc?.value || {}) };
-  }
-  async function quoteDelivery(pincode, subtotal) {
-    const s = await getDeliverySettings();
-    const trimmed = (pincode || '').trim();
-    let pin = await (await col('pincodes')).findOne({ pincode: trimmed });
-    // Same pincode as store → 0 km
-    if (!pin && trimmed === s.storePincode) {
-      pin = { pincode: trimmed, distanceKm: 0, deliverable: true, city: 'Store location' };
-    }
-    if (!pin) {
-      if (s.fallbackPolicy && s.fallbackPolicy.startsWith('flat:')) {
-        const charge = Number(s.fallbackPolicy.split(':')[1]) || 0;
-        return { deliverable: true, distanceKm: null, charge, slab: { label: 'Outside zones — flat rate' }, message: 'Delivery charge based on flat fallback rate.' };
-      }
-      return { deliverable: false, message: `PIN ${trimmed || '—'} is outside our delivery zone. Please contact support for special arrangements.` };
-    }
-    if (pin.deliverable === false) {
-      return { deliverable: false, distanceKm: pin.distanceKm, message: `Sorry — we don't currently deliver to ${pin.city || pin.pincode}.` };
-    }
-    const slab = (s.slabs || []).find(sl => pin.distanceKm >= sl.fromKm && pin.distanceKm < sl.toKm);
-    if (!slab) {
-      return { deliverable: false, distanceKm: pin.distanceKm, message: `${pin.city || pin.pincode} is ${pin.distanceKm} km from our store — ${s.notDeliverableLabel || 'beyond delivery range'}.` };
-    }
-    const freeFromSubtotal = (s.freeDeliveryThreshold || 0) > 0 && Number(subtotal || 0) >= s.freeDeliveryThreshold;
-    return {
-      deliverable: true,
-      distanceKm: pin.distanceKm,
-      city: pin.city, state: pin.state,
-      slab,
-      charge: freeFromSubtotal ? 0 : slab.charge,
-      free: freeFromSubtotal,
-      message: freeFromSubtotal ? `FREE delivery on orders above ₹${s.freeDeliveryThreshold}.` : `${pin.distanceKm} km from store — ${slab.label} slab.`,
-    };
-  }
+  // Helpers (DEFAULT_DELIVERY, getDeliverySettings, quoteDelivery) are defined
+  // at module top-level to avoid a TDZ — they're referenced earlier by
+  // POST /orders. See top of this file.
 
   if (path === '/delivery/quote' && method === 'GET') {
     const pincode = url.searchParams.get('pincode');
