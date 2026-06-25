@@ -2,6 +2,7 @@
 import ContentPage from '@/components/ContentPage';
 export default function Privacy() {
   return <ContentPage
+    cmsKey="privacyPolicy"
     title="Privacy Policy"
     subtitle="How Dhara Aadhvika collects, uses and protects your information."
     sections={[

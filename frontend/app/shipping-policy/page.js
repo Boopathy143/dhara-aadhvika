@@ -2,6 +2,7 @@
 import ContentPage from '@/components/ContentPage';
 export default function ShippingPolicy() {
   return <ContentPage
+    cmsKey="shippingPolicy"
     title="Shipping Policy"
     subtitle="Where, when and how we deliver your order."
     sections={[

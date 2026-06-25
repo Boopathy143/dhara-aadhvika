@@ -13,10 +13,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Trash2, Pencil, Plus, IndianRupee, Package, ShoppingBag, Users, Tag, X, CheckCircle2, XCircle, Maximize2, Download, ZoomIn, ZoomOut, FileText, ExternalLink } from 'lucide-react';
+import { Trash2, Pencil, Plus, IndianRupee, Package, ShoppingBag, Users, Tag, X, CheckCircle2, XCircle, Maximize2, Download, ZoomIn, ZoomOut, FileText, ExternalLink, Settings, Image as ImageIcon } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { toast } from 'sonner';
 import { UNIT_OPTIONS, formatPack, inr } from '@/lib/format';
+import AdminCMS from './_cms';
+import AdminBanners from './_banners';
+import AdminUsersPanel from './_users';
 
 const empty = {
   name: '', brand: '', category: '', price: 0, mrp: 0, image: '', description: '',
@@ -41,7 +44,6 @@ export default function AdminPage() {
   const { data: products, mutate: refetchProducts } = useSWR('/api/products?limit=48');
   const { data: orders, mutate: refetchOrders } = useSWR('/api/admin/orders');
   const { data: payments, mutate: refetchPayments } = useSWR('/api/admin/payments');
-  const { data: users } = useSWR('/api/admin/users');
   const { data: cats = [] } = useSWR('/api/categories');
   const { data: brands = [] } = useSWR('/api/brands');
   const { data: coupons, mutate: refetchCoupons } = useSWR('/api/admin/coupons');
@@ -173,6 +175,8 @@ export default function AdminPage() {
             <TabsTrigger value="coupons" data-testid="tab-coupons">Coupons</TabsTrigger>
             <TabsTrigger value="reviews" data-testid="tab-reviews">Reviews</TabsTrigger>
             <TabsTrigger value="returns" data-testid="tab-returns">Returns{returns?.items?.length ? ` (${returns.items.length})` : ''}</TabsTrigger>
+            <TabsTrigger value="banners" data-testid="tab-banners"><ImageIcon className="h-3.5 w-3.5 mr-1.5" />Banners</TabsTrigger>
+            <TabsTrigger value="cms" data-testid="tab-cms"><Settings className="h-3.5 w-3.5 mr-1.5" />Site Settings</TabsTrigger>
           </TabsList>
 
           <TabsContent value="products" className="mt-4">
@@ -246,15 +250,7 @@ export default function AdminPage() {
           </TabsContent>
 
           <TabsContent value="users" className="mt-4">
-            <h2 className="text-xl font-semibold mb-4">User Management</h2>
-            <Card><CardContent className="p-0 overflow-x-auto"><table className="w-full text-sm">
-              <thead className="bg-secondary/40"><tr><th className="p-3 text-left">Name</th><th className="p-3 text-left">Email</th><th className="p-3 text-left">Role</th><th className="p-3 text-left">Joined</th></tr></thead>
-              <tbody>{(users?.items || []).map(u => (<tr key={u.id} className="border-t border-border">
-                <td className="p-3">{u.name}</td><td className="p-3">{u.email}</td>
-                <td className="p-3"><Badge variant={u.role === 'admin' ? 'default' : 'outline'} className={u.role === 'admin' ? 'bg-amber-700' : ''}>{u.role}</Badge></td>
-                <td className="p-3 text-muted-foreground">{new Date(u.createdAt).toLocaleDateString()}</td>
-              </tr>))}</tbody>
-            </table></CardContent></Card>
+            <AdminUsersPanel />
           </TabsContent>
 
           <TabsContent value="coupons" className="mt-4 space-y-4">
@@ -334,6 +330,14 @@ export default function AdminPage() {
                 </div>
               </CardContent></Card>
             ))}{(returns?.items || []).length === 0 && <p className="text-muted-foreground text-center py-8">No return requests yet</p>}</div>
+          </TabsContent>
+
+          <TabsContent value="banners" className="mt-4">
+            <AdminBanners />
+          </TabsContent>
+
+          <TabsContent value="cms" className="mt-4">
+            <AdminCMS />
           </TabsContent>
         </Tabs>
 

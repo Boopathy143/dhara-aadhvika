@@ -2,6 +2,7 @@
 import ContentPage from '@/components/ContentPage';
 export default function RefundPolicy() {
   return <ContentPage
+    cmsKey="refundPolicy"
     title="Refund Policy"
     subtitle="How and when you get your money back."
     sections={[

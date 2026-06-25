@@ -1,24 +1,31 @@
 'use client';
 import Link from 'next/link';
 import { useState } from 'react';
+import useSWR from 'swr';
 import { Leaf, Mail, Phone, MapPin, Instagram, Facebook, Twitter, Youtube } from 'lucide-react';
 import { toast } from 'sonner';
 import { COMPANY, WHATSAPP_LINK } from '@/lib/company';
 
 export default function Footer() {
   const [email, setEmail] = useState('');
+  const { data: settings } = useSWR('/api/settings');
+  const company = { ...COMPANY, ...(settings?.company || {}) };
+  const socials = { ...COMPANY.socials, ...(settings?.socials || {}) };
+  const whatsappLink = company.whatsapp ? `https://wa.me/91${company.whatsapp}` : WHATSAPP_LINK;
+
   const subscribe = async (e) => {
     e.preventDefault();
     const res = await fetch('/api/newsletter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
     if (res.ok) { toast.success('Subscribed! Welcome to the Dhara family.'); setEmail(''); }
     else toast.error('Please enter a valid email');
   };
-  const socials = [
-    { I: Instagram, href: COMPANY.socials.instagram, label: 'Instagram' },
-    { I: Facebook, href: COMPANY.socials.facebook, label: 'Facebook' },
-    { I: Twitter, href: COMPANY.socials.twitter, label: 'X (Twitter)' },
-    { I: Youtube, href: COMPANY.socials.youtube, label: 'YouTube' },
-  ];
+  const socialList = [
+    { I: Instagram, href: socials.instagram, label: 'Instagram' },
+    { I: Facebook, href: socials.facebook, label: 'Facebook' },
+    { I: Twitter, href: socials.twitter, label: 'X (Twitter)' },
+    { I: Youtube, href: socials.youtube, label: 'YouTube' },
+  ].filter(s => s.href);
+
   return (
     <footer className="mt-20 bg-gradient-to-br from-emerald-950 via-stone-900 to-amber-950 text-stone-200">
       <div className="container mx-auto px-4 py-12 grid grid-cols-2 md:grid-cols-5 gap-8 text-sm">
@@ -33,7 +40,7 @@ export default function Footer() {
             <button className="h-10 px-4 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium" data-testid="newsletter-subscribe-btn">Subscribe</button>
           </form>
           <div className="flex gap-3 mt-5">
-            {socials.map(({ I, href, label }) => (
+            {socialList.map(({ I, href, label }) => (
               <a key={label} href={href} target="_blank" rel="noopener noreferrer" aria-label={label} className="h-9 w-9 grid place-items-center rounded-full bg-stone-800 hover:bg-emerald-700 transition" data-testid={`footer-social-${label.toLowerCase().split(' ')[0]}`}>
                 <I className="h-4 w-4" />
               </a>
@@ -78,11 +85,11 @@ export default function Footer() {
       <div className="border-t border-stone-800">
         <div className="container mx-auto px-4 py-5 flex flex-wrap items-center justify-between gap-3 text-xs text-stone-500">
           <div className="flex flex-wrap gap-4">
-            <a href={`mailto:${COMPANY.supportEmail}`} className="flex items-center gap-1.5 hover:text-amber-400" data-testid="footer-email"><Mail className="h-3.5 w-3.5" />{COMPANY.supportEmail}</a>
-            <a href={WHATSAPP_LINK} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 hover:text-amber-400" data-testid="footer-whatsapp"><Phone className="h-3.5 w-3.5" />WhatsApp {COMPANY.phoneDisplay}</a>
+            <a href={`mailto:${company.supportEmail}`} className="flex items-center gap-1.5 hover:text-amber-400" data-testid="footer-email"><Mail className="h-3.5 w-3.5" />{company.supportEmail}</a>
+            <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 hover:text-amber-400" data-testid="footer-whatsapp"><Phone className="h-3.5 w-3.5" />WhatsApp {company.phoneDisplay}</a>
             <span className="flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5" />{COMPANY.address.city}, {COMPANY.address.state}, India</span>
           </div>
-          <div>© {new Date().getFullYear()} {COMPANY.name} • Proprietor: {COMPANY.owner} • FSSAI Lic: {COMPANY.fssai}</div>
+          <div>© {new Date().getFullYear()} {company.name} • Proprietor: {company.owner} • FSSAI Lic: {company.fssai}</div>
         </div>
       </div>
     </footer>

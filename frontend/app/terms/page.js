@@ -2,6 +2,7 @@
 import ContentPage from '@/components/ContentPage';
 export default function Terms() {
   return <ContentPage
+    cmsKey="termsAndConditions"
     title="Terms and Conditions"
     subtitle="The terms governing use of the Dhara Aadhvika website and services."
     sections={[

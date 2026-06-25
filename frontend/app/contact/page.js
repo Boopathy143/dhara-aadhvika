@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import useSWR from 'swr';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import { Card, CardContent } from '@/components/ui/card';
@@ -12,6 +13,10 @@ import { toast } from 'sonner';
 import { COMPANY, WHATSAPP_LINK } from '@/lib/company';
 
 export default function ContactPage() {
+  const { data: settings } = useSWR('/api/settings');
+  const company = { ...COMPANY, ...(settings?.company || {}) };
+  const whatsappLink = company.whatsapp ? `https://wa.me/91${company.whatsapp}` : WHATSAPP_LINK;
+  const intro = settings?.content?.contactIntro || 'Questions about products, bulk orders, or just want to say hi? Drop us a line.';
   const [form, setForm] = useState({ name: '', email: '', phone: '', subject: '', message: '' });
   const [sending, setSending] = useState(false);
   const submit = async (e) => {
@@ -30,7 +35,7 @@ export default function ContactPage() {
           <div className="container mx-auto px-4 py-16 md:py-20">
             <div className="text-xs uppercase tracking-[0.25em] text-amber-200 font-semibold">We’d love to hear from you</div>
             <h1 className="text-3xl md:text-5xl font-bold mt-2">Get in Touch</h1>
-            <p className="mt-2 max-w-2xl opacity-90">Questions about products, bulk orders, or just want to say hi? Drop us a line.</p>
+            <p className="mt-2 max-w-2xl opacity-90">{intro}</p>
           </div>
         </div>
         <div className="container mx-auto px-4 py-12 grid lg:grid-cols-[1fr_400px] gap-8">
@@ -46,10 +51,10 @@ export default function ContactPage() {
           </form></CardContent></Card>
           <div className="space-y-3">
             {[
-              { i: Mail, t: 'Email', d: COMPANY.supportEmail, s: 'Replies within 24 hours', href: `mailto:${COMPANY.supportEmail}` },
-              { i: Phone, t: 'WhatsApp & Phone', d: COMPANY.phoneDisplay, s: 'Mon-Sat • 9 AM - 7 PM IST', href: WHATSAPP_LINK },
-              { i: MapPin, t: 'Address', d: COMPANY.addressLine, s: `Proprietor: ${COMPANY.owner}` },
-              { i: MessageCircle, t: 'Bulk / Corporate', d: COMPANY.supportEmail, s: 'Custom hampers & pricing', href: `mailto:${COMPANY.supportEmail}` },
+              { i: Mail, t: 'Email', d: company.supportEmail, s: 'Replies within 24 hours', href: `mailto:${company.supportEmail}` },
+              { i: Phone, t: 'WhatsApp & Phone', d: company.phoneDisplay, s: 'Mon-Sat • 9 AM - 7 PM IST', href: whatsappLink },
+              { i: MapPin, t: 'Address', d: company.addressLine, s: `Proprietor: ${company.owner}` },
+              { i: MessageCircle, t: 'Bulk / Corporate', d: company.supportEmail, s: 'Custom hampers & pricing', href: `mailto:${company.supportEmail}` },
               { i: Clock, t: 'Support Hours', d: 'Mon — Sat', s: '9:00 AM — 7:00 PM IST' },
             ].map(({ i: I, t, d, s, href }) => {
               const Inner = (
