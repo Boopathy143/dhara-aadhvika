@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { mutate } from 'swr';
+import { formatPack } from '@/lib/format';
 
 export default function ProductCard({ p }) {
   const discount = Math.round(((p.mrp - p.price) / p.mrp) * 100);
@@ -32,7 +33,7 @@ export default function ProductCard({ p }) {
         </div>
         <CardContent className="p-4 space-y-2">
           <h3 className="font-medium line-clamp-2 min-h-[2.5rem] text-sm">{p.name}</h3>
-          {p.weight && <p className="text-xs text-muted-foreground">{p.weight}</p>}
+          {formatPack(p) && <p className="text-xs text-muted-foreground" data-testid={`product-card-pack-${p.id}`}>{formatPack(p)}</p>}
           <div className="flex items-center gap-2 text-xs">
             <span className="flex items-center gap-1 bg-emerald-700 text-white px-1.5 py-0.5 rounded"><Star className="h-3 w-3 fill-white" />{p.rating}</span>
             <span className="text-muted-foreground">({p.ratingCount})</span>

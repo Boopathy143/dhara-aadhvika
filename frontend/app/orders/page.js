@@ -16,13 +16,21 @@ import { Download, RotateCw, XCircle, CheckCircle2, Truck, Package, Clock, Undo2
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { toast } from 'sonner';
+import { COMPANY } from '@/lib/company';
+import { inrPdf, formatPack } from '@/lib/format';
 
-const RETURN_REASONS = ['Damaged or defective item', 'Wrong item delivered', 'Quality not as expected', 'Item missing from order', 'No longer needed', 'Other'];
+const RETURN_REASONS = ['Damaged Product', 'Wrong Product', 'Expired Product', 'Quality Issue', 'Missing Item', 'Other'];
 
 const returnStatusMeta = {
-  pending: { color: 'bg-amber-500', label: 'Return Pending' },
+  pending: { color: 'bg-amber-500', label: 'Return Requested' },
+  under_review: { color: 'bg-indigo-500', label: 'Under Review' },
   approved: { color: 'bg-emerald-600', label: 'Return Approved' },
   rejected: { color: 'bg-red-500', label: 'Return Rejected' },
+  pickup_scheduled: { color: 'bg-amber-600', label: 'Pickup Scheduled' },
+  pickup_completed: { color: 'bg-amber-700', label: 'Pickup Completed' },
+  refunded: { color: 'bg-emerald-700', label: 'Refunded' },
+  replaced: { color: 'bg-emerald-700', label: 'Replaced' },
+  closed: { color: 'bg-stone-600', label: 'Closed' },
 };
 const refundStatusMeta = {
   not_initiated: 'Refund: Not initiated',
@@ -32,7 +40,9 @@ const refundStatusMeta = {
 
 const statusMeta = {
   placed: { color: 'bg-blue-500', label: 'Placed', icon: Clock },
+  payment_verification_pending: { color: 'bg-amber-500', label: 'Payment Verification Pending', icon: Clock },
   confirmed: { color: 'bg-indigo-500', label: 'Confirmed', icon: CheckCircle2 },
+  payment_rejected: { color: 'bg-red-500', label: 'Payment Rejected', icon: XCircle },
   shipped: { color: 'bg-amber-600', label: 'Shipped', icon: Truck },
   delivered: { color: 'bg-emerald-700', label: 'Delivered', icon: Package },
   cancelled: { color: 'bg-red-500', label: 'Cancelled', icon: XCircle },
@@ -43,44 +53,57 @@ export function downloadInvoice(order) {
   const W = doc.internal.pageSize.getWidth();
   // Header
   doc.setFillColor(21, 128, 61);
-  doc.rect(0, 0, W, 35, 'F');
+  doc.rect(0, 0, W, 38, 'F');
   doc.setTextColor(255, 255, 255);
-  doc.setFontSize(22); doc.setFont('helvetica', 'bold');
-  doc.text('DHARA AADHVIKA', 14, 17);
-  doc.setFontSize(9); doc.setFont('helvetica', 'normal');
-  doc.text('Pure • Honest • Rooted', 14, 24);
-  doc.text('FSSAI: 12345678901234 • GSTIN: 33ABCDE1234F1Z5', 14, 30);
+  doc.setFontSize(20); doc.setFont('helvetica', 'bold');
+  doc.text(COMPANY.legalName, 14, 15);
+  doc.setFontSize(8); doc.setFont('helvetica', 'normal');
+  doc.text(COMPANY.tagline, 14, 21);
+  doc.text(COMPANY.addressLine, 14, 26);
+  doc.text(`FSSAI: ${COMPANY.fssai}  |  GSTIN: ${COMPANY.gstin}`, 14, 31);
+  doc.text(`Proprietor: ${COMPANY.owner}  |  ${COMPANY.supportEmail}  |  WhatsApp ${COMPANY.phoneDisplay}`, 14, 35);
 
   doc.setTextColor(40, 40, 40);
   doc.setFontSize(16); doc.setFont('helvetica', 'bold');
-  doc.text('TAX INVOICE', W - 14, 17, { align: 'right' });
+  doc.text('TAX INVOICE', W - 14, 14, { align: 'right' });
   doc.setFontSize(9); doc.setFont('helvetica', 'normal');
-  doc.text(`Invoice #: INV-${order.id}`, W - 14, 24, { align: 'right' });
-  doc.text(`Order #: ${order.id}`, W - 14, 28, { align: 'right' });
-  doc.text(`Date: ${new Date(order.createdAt).toLocaleDateString('en-IN')}`, W - 14, 32, { align: 'right' });
+  doc.text(`Invoice #: INV-${order.id}`, W - 14, 21, { align: 'right' });
+  doc.text(`Order #: ${order.id}`, W - 14, 26, { align: 'right' });
+  doc.text(`Date: ${new Date(order.createdAt).toLocaleDateString('en-IN')}`, W - 14, 31, { align: 'right' });
+  doc.text(`Payment: ${order.paymentMethod} • ${(order.status || '').toUpperCase()}`, W - 14, 35, { align: 'right' });
 
   // Bill / Ship to
-  let y = 48;
+  let y = 50;
   doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
   doc.text('BILL TO / SHIP TO', 14, y);
   doc.setFont('helvetica', 'normal');
-  doc.text(order.address.name, 14, y + 6);
+  doc.text(order.address.name || '', 14, y + 6);
   doc.text(order.address.phone || '', 14, y + 11);
-  doc.text(order.address.line1, 14, y + 16);
-  doc.text(`${order.address.city}, ${order.address.state || ''} - ${order.address.pincode}`, 14, y + 21);
+  doc.text(order.address.line1 || '', 14, y + 16);
+  doc.text(`${order.address.city || ''}, ${order.address.state || ''} - ${order.address.pincode || ''}`, 14, y + 21);
   doc.text(`Email: ${order.customer?.email || ''}`, 14, y + 26);
 
   doc.setFont('helvetica', 'bold');
   doc.text('PAYMENT', W - 60, y);
   doc.setFont('helvetica', 'normal');
-  doc.text(`Method: ${order.paymentMethod}`, W - 60, y + 6);
-  doc.text(`Status: ${order.status.toUpperCase()}`, W - 60, y + 11);
+  doc.text(`Method: ${order.paymentMethod || ''}`, W - 60, y + 6);
+  doc.text(`Status: ${(order.status || '').toUpperCase()}`, W - 60, y + 11);
+  if (order.paymentDetails?.transactionId) {
+    doc.text(`Txn: ${order.paymentDetails.transactionId}`, W - 60, y + 16);
+  }
 
   // Items table
   autoTable(doc, {
-    startY: y + 36,
-    head: [['#', 'Item', 'Qty', 'Price', 'Total']],
-    body: order.items.map((it, idx) => [idx + 1, it.name, it.qty, `₹${it.price.toLocaleString('en-IN')}`, `₹${it.total.toLocaleString('en-IN')}`]),
+    startY: y + 32,
+    head: [['#', 'Item', 'Pack', 'Qty', 'Price', 'Total']],
+    body: order.items.map((it, idx) => [
+      idx + 1,
+      it.name,
+      formatPack(it) || '-',
+      it.qty,
+      inrPdf(it.price),
+      inrPdf(it.total),
+    ]),
     theme: 'striped',
     headStyles: { fillColor: [21, 128, 61], textColor: 255 },
     styles: { fontSize: 9 },
@@ -88,20 +111,21 @@ export function downloadInvoice(order) {
 
   let ty = doc.lastAutoTable.finalY + 8;
   doc.setFontSize(10);
-  const row = (label, value, bold) => { doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.text(label, W - 60, ty); doc.text(value, W - 14, ty, { align: 'right' }); ty += 6; };
-  row('Subtotal', `₹${order.subtotal.toLocaleString('en-IN')}`);
-  if (order.discount) row(`Discount (${order.couponCode || 'Coupon'})`, `-₹${order.discount.toLocaleString('en-IN')}`);
-  row('GST (5%)', `₹${order.tax.toLocaleString('en-IN')}`);
-  row('Shipping', order.shipping ? `₹${order.shipping.toLocaleString('en-IN')}` : 'FREE');
-  doc.setDrawColor(180); doc.line(W - 70, ty - 3, W - 14, ty - 3);
-  row('GRAND TOTAL', `₹${order.total.toLocaleString('en-IN')}`, true);
+  const row = (label, value, bold) => { doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.text(label, W - 70, ty); doc.text(value, W - 14, ty, { align: 'right' }); ty += 6; };
+  row('Subtotal', inrPdf(order.subtotal));
+  if (order.discount) row(`Discount (${order.couponCode || 'Coupon'})`, `- ${inrPdf(order.discount)}`);
+  row('GST (5%)', inrPdf(order.tax));
+  row('Shipping', order.shipping ? inrPdf(order.shipping) : 'FREE');
+  doc.setDrawColor(180); doc.line(W - 80, ty - 3, W - 14, ty - 3);
+  row('GRAND TOTAL', inrPdf(order.total), true);
 
   // Footer
   ty = Math.max(ty + 10, 250);
   doc.setFontSize(8); doc.setTextColor(120);
   doc.text('Thank you for choosing Dhara Aadhvika — nourishing families the natural way.', 14, ty);
-  doc.text('For support: hello@dharaaadhvika.com | +91 98765 43210', 14, ty + 5);
+  doc.text(`For support: ${COMPANY.supportEmail} | WhatsApp ${COMPANY.phoneDisplay}`, 14, ty + 5);
   doc.text('This is a computer-generated invoice and does not require a signature.', 14, ty + 10);
+  doc.text('All amounts in INR. "Rs." prefix used in PDF for cross-platform readability.', 14, ty + 15);
 
   doc.save(`Invoice-${order.id}.pdf`);
 }
@@ -127,7 +151,10 @@ export default function OrdersPage() {
   const onReturnFile = (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    if (f.size > 2 * 1024 * 1024) { toast.error('Image must be under 2 MB'); return; }
+    if (f.size > 2 * 1024 * 1024) { toast.error('File must be under 2 MB'); return; }
+    const isImage = f.type.startsWith('image/');
+    const isPdf = f.type === 'application/pdf';
+    if (!isImage && !isPdf) { toast.error('Only JPG, PNG or PDF accepted'); return; }
     const reader = new FileReader();
     reader.onload = () => setReturnForm((r) => ({ ...r, image: reader.result, filename: f.name }));
     reader.readAsDataURL(f);
@@ -164,19 +191,19 @@ export default function OrdersPage() {
               </div>
               <div className="space-y-3 mb-3">{o.items.map(i => {
                 const rr = i.returnRequest;
-                const rm = rr && returnStatusMeta[rr.status];
+                const rm = rr && (returnStatusMeta[rr.status] || { color: 'bg-stone-500', label: rr.status });
                 return (
                   <div key={i.productId} className="flex items-center gap-3 text-sm flex-wrap">
                     <img src={i.image} alt={i.name} className="h-12 w-12 rounded object-cover border border-border" />
-                    <span className="flex-1 min-w-[120px]">{i.name} x{i.qty}</span>
+                    <span className="flex-1 min-w-[120px]">{i.name}{formatPack(i) ? ` (${formatPack(i)})` : ''} x{i.qty}</span>
                     <span>₹{i.total.toLocaleString('en-IN')}</span>
                     {rr ? (
                       <div className="flex flex-col items-end gap-1">
-                        <Badge className={`${rm.color} text-white text-[10px]`}>{rm.label}</Badge>
-                        <span className="text-[10px] text-muted-foreground">{refundStatusMeta[rr.refundStatus]}</span>
+                        <Badge className={`${rm.color} text-white text-[10px]`} data-testid={`return-status-${o.id}-${i.productId}`}>{rm.label}</Badge>
+                        <span className="text-[10px] text-muted-foreground">{refundStatusMeta[rr.refundStatus] || ''}</span>
                       </div>
                     ) : o.status === 'delivered' ? (
-                      <Button size="sm" variant="outline" onClick={() => openReturn(o.id, i)}><Undo2 className="h-3.5 w-3.5 mr-1" />Return</Button>
+                      <Button size="sm" variant="outline" onClick={() => openReturn(o.id, i)} data-testid={`return-btn-${o.id}-${i.productId}`}><Undo2 className="h-3.5 w-3.5 mr-1" />Return</Button>
                     ) : null}
                   </div>
                 );
@@ -205,13 +232,17 @@ export default function OrdersPage() {
             </div>
             <div><Label>Description</Label><Textarea rows={3} value={returnForm.description} onChange={e => setReturnForm({ ...returnForm, description: e.target.value })} placeholder="Tell us more about the issue..." /></div>
             <div>
-              <Label>Image Proof</Label>
+              <Label>Image / PDF Proof <span className="text-[10px] text-muted-foreground">(JPG, PNG or PDF, max 2 MB)</span></Label>
               <label className="flex items-center gap-2 h-10 px-3 rounded-md border border-input bg-background cursor-pointer hover:border-emerald-700 transition">
                 <Upload className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm truncate">{returnForm.filename || 'Choose image (max 2 MB)'}</span>
-                <input type="file" accept="image/*" onChange={onReturnFile} className="hidden" />
+                <span className="text-sm truncate">{returnForm.filename || 'Choose file (max 2 MB)'}</span>
+                <input type="file" accept="image/jpeg,image/png,image/jpg,application/pdf" onChange={onReturnFile} className="hidden" data-testid="return-file-input" />
               </label>
-              {returnForm.image && <img src={returnForm.image} alt="preview" className="h-24 mt-2 rounded border border-border object-contain bg-secondary/30" />}
+              {returnForm.image && (returnForm.image.startsWith('data:image') ? (
+                <img src={returnForm.image} alt="preview" className="h-24 mt-2 rounded border border-border object-contain bg-secondary/30" />
+              ) : (
+                <div className="mt-2 px-3 h-10 rounded border border-border bg-secondary/30 flex items-center gap-2 text-sm"><Upload className="h-4 w-4 text-emerald-700" /><span className="truncate">{returnForm.filename} — PDF</span></div>
+              ))}
             </div>
             <Button onClick={submitReturn} disabled={submittingReturn} className="w-full bg-gradient-to-r from-emerald-700 to-amber-700 text-white">{submittingReturn ? 'Submitting…' : 'Submit Return Request'}</Button>
           </div>

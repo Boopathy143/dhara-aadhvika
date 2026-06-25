@@ -32,7 +32,10 @@ export default function UpiPayment({ amount, orderNote, breakdown, onSubmit, sub
   const onFile = (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    if (f.size > 2 * 1024 * 1024) { toast.error('Image must be under 2 MB'); return; }
+    if (f.size > 2 * 1024 * 1024) { toast.error('File must be under 2 MB'); return; }
+    const isImage = f.type.startsWith('image/');
+    const isPdf = f.type === 'application/pdf';
+    if (!isImage && !isPdf) { toast.error('Only JPG, PNG or PDF files are accepted'); return; }
     setFilename(f.name);
     const reader = new FileReader();
     reader.onload = () => setScreenshot(reader.result);
@@ -42,7 +45,7 @@ export default function UpiPayment({ amount, orderNote, breakdown, onSubmit, sub
   const submit = () => {
     if (!transactionId.trim()) return toast.error('Enter the UPI transaction ID');
     if (transactionId.trim().length < 6) return toast.error('Transaction ID looks too short');
-    if (!screenshot) return toast.error('Upload your payment screenshot');
+    if (!screenshot) return toast.error('Upload your payment receipt (JPG, PNG or PDF)');
     onSubmit({ transactionId: transactionId.trim(), screenshot });
   };
 
@@ -99,19 +102,23 @@ export default function UpiPayment({ amount, orderNote, breakdown, onSubmit, sub
         )}
 
         <div className="space-y-3 pt-2 border-t border-border">
-          <div className="text-sm font-semibold flex items-center gap-1.5"><CheckCircle2 className="h-4 w-4 text-emerald-700" />After you've paid</div>
+          <div className="text-sm font-semibold flex items-center gap-1.5"><CheckCircle2 className="h-4 w-4 text-emerald-700" />After you have paid</div>
           <div className="grid sm:grid-cols-2 gap-3">
             <div><Label>UPI Transaction ID *</Label><Input value={transactionId} onChange={e => setTransactionId(e.target.value)} placeholder="e.g. 4324923XXXX" /></div>
             <div>
-              <Label>Payment Screenshot *</Label>
+              <Label>Payment Receipt * <span className="text-[10px] text-muted-foreground">(JPG, PNG or PDF)</span></Label>
               <label className="flex items-center gap-2 h-10 px-3 rounded-md border border-input bg-background cursor-pointer hover:border-emerald-700 transition">
                 <Upload className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm truncate">{filename || 'Choose image (max 2 MB)'}</span>
-                <input type="file" accept="image/*" onChange={onFile} className="hidden" />
+                <span className="text-sm truncate">{filename || 'Choose file (max 2 MB)'}</span>
+                <input type="file" accept="image/jpeg,image/png,image/jpg,application/pdf" onChange={onFile} className="hidden" data-testid="upi-receipt-input" />
               </label>
             </div>
           </div>
-          {screenshot && <img src={screenshot} alt="preview" className="h-32 rounded border border-border object-contain bg-secondary/30" />}
+          {screenshot && (screenshot.startsWith('data:image') ? (
+            <img src={screenshot} alt="preview" className="h-32 rounded border border-border object-contain bg-secondary/30" />
+          ) : (
+            <div className="h-12 rounded border border-border bg-secondary/30 px-3 flex items-center gap-2 text-sm"><Upload className="h-4 w-4 text-emerald-700" /><span className="truncate">{filename} — PDF uploaded</span></div>
+          ))}
           <Button onClick={submit} disabled={submitting} className="w-full bg-gradient-to-r from-emerald-700 to-amber-700 text-white">{submitting ? 'Submitting…' : 'Submit Payment for Verification'}</Button>
           <p className="text-xs text-muted-foreground">Your order will be placed with status <span className="font-semibold text-amber-700">Payment Verification Pending</span> until admin verifies the transaction.</p>
         </div>

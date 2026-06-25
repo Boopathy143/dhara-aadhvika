@@ -17,12 +17,22 @@ const FLOW = [
   { key: 'delivered', label: 'Delivered', icon: Package },
 ];
 
+// Map alternate / intermediate statuses to the canonical flow stage so the
+// tracker still highlights correctly when the order moves through UPI verification.
+const STATUS_TO_STAGE = {
+  placed: 0,
+  payment_verification_pending: 0,
+  confirmed: 1,
+  shipped: 2,
+  delivered: 3,
+};
+
 export default function OrderDetail({ params }) {
   const { id } = use(params);
   const { data: o, isLoading } = useSWR(`/api/orders/${id}`);
   if (isLoading || !o) return <><Header /><div className="container mx-auto p-8 animate-pulse h-64 bg-secondary/60 rounded" /><Footer /></>;
   if (o.error) return <><Header /><div className="container mx-auto p-8 text-center">Order not found</div><Footer /></>;
-  const stepIdx = o.status === 'cancelled' ? -1 : FLOW.findIndex(f => f.key === o.status);
+  const stepIdx = (o.status === 'cancelled' || o.status === 'payment_rejected') ? -1 : (STATUS_TO_STAGE[o.status] ?? FLOW.findIndex(f => f.key === o.status));
   return (
     <><Header />
       <main className="container mx-auto px-4 py-6 space-y-6">
@@ -31,7 +41,7 @@ export default function OrderDetail({ params }) {
           <Button onClick={() => downloadInvoice(o)} className="bg-emerald-700"><Download className="h-4 w-4 mr-2" />Download Invoice</Button>
         </div>
 
-        {o.status !== 'cancelled' ? (
+        {(o.status !== 'cancelled' && o.status !== 'payment_rejected') ? (
           <Card><CardContent className="p-6">
             <h2 className="font-semibold mb-4">Order Tracking</h2>
             <div className="relative flex justify-between">{FLOW.map((f, i) => {
@@ -48,7 +58,7 @@ export default function OrderDetail({ params }) {
             })}</div>
           </CardContent></Card>
         ) : (
-          <Card><CardContent className="p-6 flex items-center gap-3"><XCircle className="h-6 w-6 text-red-600" /><div><div className="font-semibold">Order Cancelled</div><div className="text-xs text-muted-foreground">This order is no longer being processed.</div></div></CardContent></Card>
+          <Card><CardContent className="p-6 flex items-center gap-3"><XCircle className="h-6 w-6 text-red-600" /><div><div className="font-semibold">{o.status === 'payment_rejected' ? 'Payment Rejected' : 'Order Cancelled'}</div><div className="text-xs text-muted-foreground">{o.status === 'payment_rejected' ? (o.paymentRejectionReason || 'Your payment could not be verified.') : 'This order is no longer being processed.'}</div></div></CardContent></Card>
         )}
 
         <div className="grid md:grid-cols-3 gap-6">

@@ -227,6 +227,7 @@ async function handle(method, segments, request) {
     const u = await users.findOne({ email });
     if (!u || !verifyPassword(password, u.password)) return err('invalid credentials', 401);
     if (!u.emailVerified) return err('Please verify your email before logging in', 403);
+    if (u.active === false) return err('Your account has been deactivated. Please contact support.', 403);
     await createSession(u.id);
     return json({ id: u.id, name: u.name, email: u.email, role: u.role });
   }
@@ -444,7 +445,7 @@ async function handle(method, segments, request) {
     const products = await (await col('products')).find({ id: { $in: cart.items.map(i => i.productId) } }).toArray();
     const items = cart.items.map(it => {
       const p = products.find(x => x.id === it.productId);
-      return { productId: p.id, name: p.name, image: p.image, price: p.price, qty: it.qty, total: p.price * it.qty };
+      return { productId: p.id, name: p.name, image: p.image, price: p.price, qty: it.qty, total: p.price * it.qty, weight: p.weight || '', unit: p.unit || '' };
     });
     const subtotal = items.reduce((s, i) => s + i.total, 0);
     let discount = 0;
@@ -571,7 +572,7 @@ async function handle(method, segments, request) {
     await requireAdmin();
     const orderId = segments[2];
     const productId = segments[3];
-    const { status, refundStatus, adminNote } = await request.json();
+    const { status, refundStatus, replacementStatus, adminNote } = await request.json();
     const orders = await col('orders');
     const o = await orders.findOne({ id: orderId });
     if (!o) return err('order not found', 404);
@@ -580,6 +581,7 @@ async function handle(method, segments, request) {
     const set = { 'items.$.returnRequest.updatedAt': new Date() };
     if (status) set['items.$.returnRequest.status'] = status;
     if (refundStatus) set['items.$.returnRequest.refundStatus'] = refundStatus;
+    if (replacementStatus !== undefined) set['items.$.returnRequest.replacementStatus'] = replacementStatus;
     if (adminNote !== undefined) set['items.$.returnRequest.adminNote'] = adminNote;
     await orders.updateOne({ id: orderId, 'items.productId': productId }, { $set: set });
     return json({ ok: true });
@@ -627,6 +629,15 @@ async function handle(method, segments, request) {
   if (path === '/admin/orders' && method === 'GET') {
     await requireAdmin();
     const items = await (await col('orders')).find({}).sort({ createdAt: -1 }).toArray();
+    return json({ items: items.map(({ _id, ...r }) => r) });
+  }
+  // Dedicated endpoint that returns ONLY orders that are awaiting UPI payment verification.
+  if (path === '/admin/payments' && method === 'GET') {
+    await requireAdmin();
+    const items = await (await col('orders'))
+      .find({ paymentMethod: 'UPI' })
+      .sort({ createdAt: -1 })
+      .toArray();
     return json({ items: items.map(({ _id, ...r }) => r) });
   }
   if (path.startsWith('/admin/orders/') && method === 'PUT') {
@@ -681,7 +692,6 @@ async function handle(method, segments, request) {
     return json(review);
   }
 
-  // Contact form (just store; can be wired to email later)
   if (path === '/contact' && method === 'POST') {
     const body = await request.json();
     await (await col('contact_messages')).insertOne({ id: uuid(), ...body, createdAt: new Date() });
@@ -691,6 +701,117 @@ async function handle(method, segments, request) {
     const { email } = await request.json();
     if (!email) return err('email required');
     await (await col('newsletter')).updateOne({ email }, { $set: { email, createdAt: new Date() } }, { upsert: true });
+    return json({ ok: true });
+  }
+
+  // ---------- SITE SETTINGS / CMS ----------
+  // Public endpoint: returns the editable site settings & content blocks.
+  // Falls back to sensible defaults from /lib/company.js if nothing has been
+  // saved yet. The admin UI mutates these via PUT /admin/settings.
+  if (path === '/settings' && method === 'GET') {
+    const s = await (await col('site_settings')).findOne({ key: 'main' });
+    const { _id, ...rest } = s || {};
+    return json(rest.value || {});
+  }
+  if (path === '/admin/settings' && method === 'GET') {
+    await requireAdmin();
+    const s = await (await col('site_settings')).findOne({ key: 'main' });
+    const { _id, ...rest } = s || {};
+    return json(rest.value || {});
+  }
+  if (path === '/admin/settings' && method === 'PUT') {
+    await requireAdmin();
+    const body = await request.json();
+    await (await col('site_settings')).updateOne(
+      { key: 'main' },
+      { $set: { key: 'main', value: body, updatedAt: new Date() } },
+      { upsert: true },
+    );
+    return json({ ok: true });
+  }
+
+  // Banners (homepage hero slides)
+  if (path === '/banners' && method === 'GET') {
+    const items = await (await col('banners')).find({ active: { $ne: false } }).sort({ order: 1 }).toArray();
+    return json({ items: items.map(({ _id, ...r }) => r) });
+  }
+  if (path === '/admin/banners' && method === 'GET') {
+    await requireAdmin();
+    const items = await (await col('banners')).find({}).sort({ order: 1 }).toArray();
+    return json({ items: items.map(({ _id, ...r }) => r) });
+  }
+  if (path === '/admin/banners' && method === 'POST') {
+    await requireAdmin();
+    const body = await request.json();
+    const item = { id: uuid(), order: 999, active: true, ...body, createdAt: new Date() };
+    await (await col('banners')).insertOne(item);
+    const { _id, ...r } = item;
+    return json(r);
+  }
+  if (path.startsWith('/admin/banners/') && method === 'PUT') {
+    await requireAdmin();
+    const id = segments[2];
+    const body = await request.json();
+    delete body._id; delete body.id;
+    await (await col('banners')).updateOne({ id }, { $set: body });
+    return json({ ok: true });
+  }
+  if (path.startsWith('/admin/banners/') && method === 'DELETE') {
+    await requireAdmin();
+    await (await col('banners')).deleteOne({ id: segments[2] });
+    return json({ ok: true });
+  }
+
+  // ---------- ADMIN USER MANAGEMENT ----------
+  if (path.startsWith('/admin/users/') && segments[3] === 'details' && method === 'GET') {
+    await requireAdmin();
+    const userId = segments[2];
+    const users = await col('users');
+    const u = await users.findOne({ id: userId });
+    if (!u) return err('user not found', 404);
+    const { password, _id, ...userPublic } = u;
+    const orders = await (await col('orders')).find({ userId }).sort({ createdAt: -1 }).limit(50).toArray();
+    const addresses = await (await col('addresses')).find({ userId }).toArray();
+    return json({
+      user: userPublic,
+      orders: orders.map(({ _id, ...r }) => r),
+      addresses: addresses.map(({ _id, ...r }) => r),
+    });
+  }
+  if (path.startsWith('/admin/users/') && method === 'PUT') {
+    await requireAdmin();
+    const userId = segments[2];
+    const me = await getCurrentUser();
+    const { name, email, role, active, newPassword } = await request.json();
+    const update = {};
+    if (typeof name === 'string') update.name = name;
+    if (typeof email === 'string') update.email = email;
+    if (typeof role === 'string') {
+      if (me.id === userId && role !== 'admin') return err('cannot remove your own admin role', 400);
+      update.role = role;
+    }
+    if (typeof active === 'boolean') {
+      if (me.id === userId && active === false) return err('cannot deactivate yourself', 400);
+      update.active = active;
+    }
+    if (newPassword) {
+      if (newPassword.length < 6) return err('password must be 6+ characters');
+      update.password = hashPassword(newPassword);
+      update.passwordResetAt = new Date();
+    }
+    if (!Object.keys(update).length) return err('nothing to update');
+    await (await col('users')).updateOne({ id: userId }, { $set: update });
+    return json({ ok: true });
+  }
+  if (path.startsWith('/admin/users/') && method === 'DELETE') {
+    await requireAdmin();
+    const userId = segments[2];
+    const me = await getCurrentUser();
+    if (me.id === userId) return err('cannot delete yourself', 400);
+    await (await col('users')).deleteOne({ id: userId });
+    await (await col('carts')).deleteMany({ userId });
+    await (await col('addresses')).deleteMany({ userId });
+    await (await col('wishlists')).deleteMany({ userId });
     return json({ ok: true });
   }
 

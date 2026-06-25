@@ -9,6 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Mail, Phone, MapPin, MessageCircle, Clock } from 'lucide-react';
 import { toast } from 'sonner';
+import { COMPANY, WHATSAPP_LINK } from '@/lib/company';
 
 export default function ContactPage() {
   const [form, setForm] = useState({ name: '', email: '', phone: '', subject: '', message: '' });
@@ -45,17 +46,24 @@ export default function ContactPage() {
           </form></CardContent></Card>
           <div className="space-y-3">
             {[
-              { i: Mail, t: 'Email', d: 'hello@dharaaadhvika.com', s: 'Replies within 24 hours' },
-              { i: Phone, t: 'Phone & WhatsApp', d: '+91 98765 43210', s: 'Mon-Sat • 9 AM - 7 PM IST' },
-              { i: MapPin, t: 'Address', d: 'Chennai, Tamil Nadu, India', s: 'Visit by appointment' },
-              { i: MessageCircle, t: 'Bulk / Corporate', d: 'wholesale@dharaaadhvika.com', s: 'Custom hampers & pricing' },
+              { i: Mail, t: 'Email', d: COMPANY.supportEmail, s: 'Replies within 24 hours', href: `mailto:${COMPANY.supportEmail}` },
+              { i: Phone, t: 'WhatsApp & Phone', d: COMPANY.phoneDisplay, s: 'Mon-Sat • 9 AM - 7 PM IST', href: WHATSAPP_LINK },
+              { i: MapPin, t: 'Address', d: COMPANY.addressLine, s: `Proprietor: ${COMPANY.owner}` },
+              { i: MessageCircle, t: 'Bulk / Corporate', d: COMPANY.supportEmail, s: 'Custom hampers & pricing', href: `mailto:${COMPANY.supportEmail}` },
               { i: Clock, t: 'Support Hours', d: 'Mon — Sat', s: '9:00 AM — 7:00 PM IST' },
-            ].map(({ i: I, t, d, s }) => (
-              <Card key={t}><CardContent className="p-4 flex gap-3 items-start">
-                <div className="h-10 w-10 rounded-lg bg-emerald-700/10 text-emerald-700 grid place-items-center"><I className="h-5 w-5" /></div>
-                <div><div className="font-semibold text-sm">{t}</div><div className="text-sm">{d}</div><div className="text-xs text-muted-foreground">{s}</div></div>
-              </CardContent></Card>
-            ))}
+            ].map(({ i: I, t, d, s, href }) => {
+              const Inner = (
+                <CardContent className="p-4 flex gap-3 items-start">
+                  <div className="h-10 w-10 rounded-lg bg-emerald-700/10 text-emerald-700 grid place-items-center"><I className="h-5 w-5" /></div>
+                  <div><div className="font-semibold text-sm">{t}</div><div className="text-sm break-all">{d}</div><div className="text-xs text-muted-foreground">{s}</div></div>
+                </CardContent>
+              );
+              return (
+                <Card key={t}>
+                  {href ? <a href={href} target={href.startsWith('http') ? '_blank' : undefined} rel="noopener noreferrer" className="block hover:bg-secondary/20 transition">{Inner}</a> : Inner}
+                </Card>
+              );
+            })}
           </div>
         </div>
       </main><Footer />

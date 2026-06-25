@@ -8,8 +8,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { Star, Heart, ShoppingCart, Truck, ShieldCheck, RotateCcw, Minus, Plus, Sprout, Award, Leaf, CheckCircle2 } from 'lucide-react';
+import { Star, Heart, ShoppingCart, Truck, ShieldCheck, RotateCcw, Minus, Plus, Sprout, Award, Leaf, CheckCircle2, Info, Clock, MapPin, BadgeCheck, Wheat, Beaker } from 'lucide-react';
 import { toast } from 'sonner';
+import { formatPack } from '@/lib/format';
 
 export default function ProductDetails({ params }) {
   const { id } = use(params);
@@ -60,7 +61,7 @@ export default function ProductDetails({ params }) {
               {p.mrp > p.price && <><span className="text-base text-muted-foreground line-through">₹{p.mrp.toLocaleString('en-IN')}</span><span className="text-emerald-700 font-semibold">{discount}% off</span></>}
             </div>
             <p className={`text-sm font-medium ${p.stock > 0 ? 'text-emerald-700' : 'text-red-600'}`}>{p.stock > 0 ? `In Stock (${p.stock} available)` : 'Out of Stock'}</p>
-            {p.weight && <p className="text-sm"><span className="text-muted-foreground">Pack size:</span> <span className="font-medium">{p.weight}</span></p>}
+            {(formatPack(p) || p.weight) && <p className="text-sm" data-testid="product-pack"><span className="text-muted-foreground">Pack size:</span> <span className="font-medium">{formatPack(p)}</span></p>}
             <p className="text-muted-foreground leading-relaxed">{p.description}</p>
             <div className="flex items-center gap-3">
               <span className="text-sm font-medium">Quantity</span>
@@ -85,18 +86,27 @@ export default function ProductDetails({ params }) {
 
         <Tabs defaultValue="details" className="mt-10">
           <TabsList><TabsTrigger value="details">Details</TabsTrigger><TabsTrigger value="specs">Specifications</TabsTrigger><TabsTrigger value="reviews">Reviews ({data.reviews.length})</TabsTrigger></TabsList>
-          <TabsContent value="details"><Card><CardContent className="p-6 space-y-4">
+          <TabsContent value="details"><Card><CardContent className="p-6 space-y-4" data-testid="product-details-tab">
             {p.keyFeatures?.length > 0 && <div><div className="flex items-center gap-2 font-semibold text-emerald-800 dark:text-emerald-300"><CheckCircle2 className="h-4 w-4" />Key Features</div><ul className="mt-2 space-y-1.5">{p.keyFeatures.map((f, i) => (<li key={i} className="flex items-start gap-2 text-sm text-muted-foreground"><CheckCircle2 className="h-3.5 w-3.5 mt-0.5 text-emerald-700 shrink-0" />{f}</li>))}</ul></div>}
-            {p.ingredients && <div><div className="flex items-center gap-2 font-semibold text-emerald-800 dark:text-emerald-300"><Sprout className="h-4 w-4" />Ingredients</div><p className="text-sm text-muted-foreground mt-1">{p.ingredients}</p></div>}
-            {p.benefits && <div><div className="flex items-center gap-2 font-semibold text-emerald-800 dark:text-emerald-300"><Award className="h-4 w-4" />Benefits</div><p className="text-sm text-muted-foreground mt-1">{p.benefits}</p></div>}
-            {p.nutrition && <div><div className="flex items-center gap-2 font-semibold text-emerald-800 dark:text-emerald-300">Nutrition</div><p className="text-sm text-muted-foreground mt-1">{p.nutrition}</p></div>}
+            {p.ingredients && <div><div className="flex items-center gap-2 font-semibold text-emerald-800 dark:text-emerald-300"><Sprout className="h-4 w-4" />Ingredients</div><p className="text-sm text-muted-foreground mt-1 whitespace-pre-line">{p.ingredients}</p></div>}
+            {p.benefits && <div><div className="flex items-center gap-2 font-semibold text-emerald-800 dark:text-emerald-300"><Award className="h-4 w-4" />Benefits</div><p className="text-sm text-muted-foreground mt-1 whitespace-pre-line">{p.benefits}</p></div>}
+            {p.usage && <div><div className="flex items-center gap-2 font-semibold text-emerald-800 dark:text-emerald-300"><Info className="h-4 w-4" />Usage Instructions</div><p className="text-sm text-muted-foreground mt-1 whitespace-pre-line">{p.usage}</p></div>}
+            {p.storage && <div><div className="flex items-center gap-2 font-semibold text-emerald-800 dark:text-emerald-300"><Beaker className="h-4 w-4" />Storage Instructions</div><p className="text-sm text-muted-foreground mt-1 whitespace-pre-line">{p.storage}</p></div>}
+            {p.nutrition && <div><div className="flex items-center gap-2 font-semibold text-emerald-800 dark:text-emerald-300"><Wheat className="h-4 w-4" />Nutritional Information</div><p className="text-sm text-muted-foreground mt-1 whitespace-pre-line">{p.nutrition}</p></div>}
           </CardContent></Card></TabsContent>
-          <TabsContent value="specs"><Card><CardContent className="p-5 space-y-5">
-            <dl className="grid sm:grid-cols-2 gap-3">{Object.entries(p.specs || {}).map(([k, v]) => (<div key={k} className="flex justify-between border-b border-border py-2"><dt className="text-muted-foreground">{k}</dt><dd className="font-medium">{v}</dd></div>))}</dl>
+          <TabsContent value="specs"><Card><CardContent className="p-5 space-y-5" data-testid="product-specs-tab">
+            <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-1">
+              {formatPack(p) && (<div className="flex justify-between border-b border-border py-2"><dt className="text-muted-foreground">Pack Size</dt><dd className="font-medium">{formatPack(p)}</dd></div>)}
+              {p.shelfLife && (<div className="flex justify-between border-b border-border py-2"><dt className="text-muted-foreground flex items-center gap-1.5"><Clock className="h-3.5 w-3.5" />Shelf Life</dt><dd className="font-medium">{p.shelfLife}</dd></div>)}
+              {p.manufacturer && (<div className="flex justify-between border-b border-border py-2"><dt className="text-muted-foreground">Manufacturer</dt><dd className="font-medium">{p.manufacturer}</dd></div>)}
+              {p.countryOfOrigin && (<div className="flex justify-between border-b border-border py-2"><dt className="text-muted-foreground flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5" />Country of Origin</dt><dd className="font-medium">{p.countryOfOrigin}</dd></div>)}
+              {p.fssaiNumber && (<div className="flex justify-between border-b border-border py-2"><dt className="text-muted-foreground flex items-center gap-1.5"><BadgeCheck className="h-3.5 w-3.5" />FSSAI No.</dt><dd className="font-medium font-mono text-xs">{p.fssaiNumber}</dd></div>)}
+              {Object.entries(p.specs || {}).map(([k, v]) => (<div key={k} className="flex justify-between border-b border-border py-2"><dt className="text-muted-foreground">{k}</dt><dd className="font-medium">{v}</dd></div>))}
+            </dl>
             {Object.keys(p.additionalInfo || {}).length > 0 && (
               <div>
                 <div className="font-semibold text-emerald-800 dark:text-emerald-300 mb-2">Additional Information</div>
-                <dl className="grid sm:grid-cols-2 gap-3">{Object.entries(p.additionalInfo).map(([k, v]) => (<div key={k} className="flex justify-between border-b border-border py-2"><dt className="text-muted-foreground">{k}</dt><dd className="font-medium">{v}</dd></div>))}</dl>
+                <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-1">{Object.entries(p.additionalInfo).map(([k, v]) => (<div key={k} className="flex justify-between border-b border-border py-2"><dt className="text-muted-foreground">{k}</dt><dd className="font-medium">{v}</dd></div>))}</dl>
               </div>
             )}
           </CardContent></Card></TabsContent>

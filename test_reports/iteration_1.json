@@ -1,0 +1,37 @@
+{
+  "summary": "Tested Dhara Aadhvika org-foods app (Next.js + MongoDB). Backend: 14/14 pytest cases pass covering products with unit/spec fields, admin payments listing, COD order flow, return submission with new reasons, extended return status workflow (under_review/approved/pickup_scheduled/pickup_completed/refunded/replaced/closed), refund & replacement statuses, UPI verify/reject endpoints. Frontend (admin dashboard): all 7 tabs visible including new Payments tab (count=2); payments list correctly shows Pending/Verified/Rejected badges with Verify/Reject buttons and Download receipt links; Returns tab shows the documented workflow string and renders Status/Refund/Replacement Selects; Add-Product modal exposes Weight + Unit (Unit select bound to UNIT_OPTIONS with all 11 values) and all 10 spec fields (Ingredients, Benefits, Usage, Storage, Shelf Life, Manufacturer, Country of Origin, FSSAI, Nutritional + repeaters). Footer & contact page show new branding (DHARA AADHVIKA, Erode Tamil Nadu address, WhatsApp +91 93849 48663, support email boopathyboopathy298@gmail.com) plus 4 working social links (Instagram/Facebook/YouTube/X) with correct URLs. Product detail (/products/p-001) renders pack size, conditional Details (Ingredients/Benefits/Nutritional) and Specifications tabs.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "route.js is 714 lines — recommended to split per-resource (products/auth/orders/returns/admin) for maintainability.",
+    "Admin form state uses `usage`/`storage`/`nutrition` keys (short) while problem statement mentioned `usageInstructions`/`storageInstructions`/`nutritionalInformation`. Current implementation is self-consistent (form & product page both read short keys), so no functional impact — just a naming note.",
+    "GET /products/:id wraps response under `{ product, related, reviews }` while listing returns `{ items: [...] }` — keep consistent shape if/when client tooling expects flat product objects.",
+    "Legacy seed products (p-001 etc.) store weight as string like '250g' with no `unit` field, so formatPack falls back to that string instead of the new '500 Gram' format. Acceptable but consider a migration script.",
+    "/orders POST snapshots only `weight` and `unit` from product — if admin later edits the product's price/name, the order snapshot remains correct (good)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {
+    "backend": "100%",
+    "frontend": "100%"
+  },
+  "test_credentials": "admin@dhara.com / admin123 (admin), user@dhara.com / user123 (user) — already documented in /app/memory/test_credentials.md and verified working via /api/auth/login.",
+  "seed_data_creation": "Tests create TEST_-prefixed products and orders; created products are deleted as part of TestProductsAdmin.test_delete_product. Test orders + return requests remain in DB (visible in admin Returns) — non-destructive.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Login route is /login (NOT /sign-in). Admin tabs: Products, Orders, Payments, Users, Coupons, Reviews, Returns (Stats numbers shown as KPI cards above tabs, not a separate tab). Backend route file is /app/frontend/app/api/[[...path]]/route.js. Returns workflow string at top of Returns tab is the QA marker. Login API returns the user object directly (not nested under `user`). Newsletter, products listing and OTP routes were not deeply re-tested — request asked to skip SMTP retest. PDF invoice intentionally uses 'Rs.' prefix instead of ₹ glyph (jsPDF helvetica limitation) — do NOT flag.",
+  "rca of the issue": "N/A — no defects found in the scoped functionality."
+}
