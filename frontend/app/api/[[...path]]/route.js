@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { v4 as uuid } from 'uuid';
 import { col, getDb } from '@/lib/db';
 import { hashPassword, verifyPassword, createSession, destroySession, getCurrentUser, requireUser, requireAdmin } from '@/lib/auth';
-import { sendOtpEmail, sendPasswordResetEmail, isEmailConfigured } from '@/lib/email';
+import { sendOtpEmail, sendPasswordResetEmail, sendQuotationEmail, isEmailConfigured } from '@/lib/email';
 import { CATEGORIES, BRANDS, PRODUCTS, HERO_SLIDES, SEED_VERSION } from '@/lib/seed-data';
 
 const json = (data, status = 200) => NextResponse.json(data, { status });
@@ -90,7 +90,7 @@ async function ensureSeeded() {
   if (global._seedPromise) return global._seedPromise;
   global._seedPromise = (async () => {
     const meta = await col('_meta');
-    try { await meta.createIndex({ key: 1 }, { unique: true }); } catch {}
+    try { await meta.createIndex({ key: 1 }, { unique: true }); } catch (e) { console.warn('[seed] createIndex skipped:', e?.message); }
     // Always ensure pincodes are populated (idempotent — independent of main seed lock)
     await ensurePincodesSeeded();
     const existing = await meta.findOne({ key: 'seedVersion' });
@@ -100,7 +100,7 @@ async function ensureSeeded() {
     try {
       await meta.insertOne({ key: 'seedLock', value: SEED_VERSION, at: new Date() });
       acquired = true;
-    } catch {}
+    } catch (e) { /* another instance grabbed lock first */ void e; }
     if (!acquired) {
       // Another instance is seeding \u2014 poll until version is set
       for (let i = 0; i < 30; i++) {
@@ -113,7 +113,7 @@ async function ensureSeeded() {
     // We hold the lock \u2014 do the seed
     const db = await getDb();
     for (const c of ['products', 'categories', 'brands', 'coupons']) {
-      try { await db.collection(c).deleteMany({}); } catch {}
+      try { await db.collection(c).deleteMany({}); } catch (e) { console.warn(`[seed] deleteMany ${c} failed:`, e?.message); }
     }
     await (await col('categories')).insertMany(CATEGORIES.map(c => ({ ...c })));
   await (await col('brands')).insertMany(BRANDS.map(b => ({ ...b })));
@@ -1121,6 +1121,239 @@ async function handle(method, segments, request) {
     await requireAdmin();
     await (await col('ledger_entries')).deleteOne({ id: segments[3] });
     return json({ ok: true });
+  }
+
+  // ---------- QUOTATIONS (Phase 5) ----------
+  // Workflow: draft → sent → accepted / rejected → converted (to order)
+  if (path === '/admin/quotations' && method === 'GET') {
+    await requireAdmin();
+    const url = new URL(request.url);
+    const statusFilter = url.searchParams.get('status');
+    const q = url.searchParams.get('q');
+    const filter = {};
+    if (statusFilter && statusFilter !== 'all') filter.status = statusFilter;
+    if (q) {
+      const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [{ number: rx }, { customerName: rx }, { customerEmail: rx }];
+    }
+    const items = await (await col('quotations')).find(filter).sort({ createdAt: -1 }).toArray();
+    return json({ items: items.map(({ _id, ...r }) => r) });
+  }
+
+  if (path === '/admin/quotations' && method === 'POST') {
+    const admin = await requireAdmin();
+    const body = await request.json();
+    const { customerId = null, customerName, customerEmail, customerPhone = '', shippingAddress = null, items = [], taxRate = 5, shipping = 0, discount = 0, notes = '', validUntil = null } = body;
+    if (!customerName || !customerEmail) return err('customerName and customerEmail are required');
+    if (!Array.isArray(items) || items.length === 0) return err('At least one line item is required');
+    const cleanItems = items.map(it => ({
+      productId: it.productId || null,
+      name: String(it.name || '').trim(),
+      description: it.description || '',
+      qty: Number(it.qty) || 0,
+      unit: it.unit || 'pcs',
+      price: Number(it.price) || 0,
+      total: Math.round(((Number(it.qty) || 0) * (Number(it.price) || 0)) * 100) / 100,
+    })).filter(it => it.name && it.qty > 0);
+    if (cleanItems.length === 0) return err('At least one valid line item is required');
+    const subtotal = cleanItems.reduce((s, it) => s + it.total, 0);
+    const taxableBase = Math.max(0, subtotal - Number(discount || 0));
+    const tax = Math.round((taxableBase * Number(taxRate || 0)) / 100 * 100) / 100;
+    const total = Math.round((taxableBase + tax + Number(shipping || 0)) * 100) / 100;
+    // Generate sequential quote number QT-YYYY-NNNN
+    const year = new Date().getFullYear();
+    const meta = await col('_meta');
+    const seqKey = `quotation_seq_${year}`;
+    const seqDoc = await meta.findOneAndUpdate(
+      { key: seqKey },
+      { $inc: { value: 1 } },
+      { upsert: true, returnDocument: 'after' }
+    );
+    // Driver returns either { value: { value: N } } or the doc directly depending on version
+    const seq = (seqDoc?.value?.value ?? seqDoc?.value ?? 1);
+    const number = `QT-${year}-${String(seq).padStart(4, '0')}`;
+    const now = new Date();
+    const quote = {
+      id: uuid(),
+      number,
+      customerId, customerName, customerEmail, customerPhone,
+      shippingAddress,
+      items: cleanItems,
+      subtotal: Math.round(subtotal * 100) / 100,
+      taxRate: Number(taxRate || 0),
+      tax, shipping: Number(shipping || 0), discount: Number(discount || 0), total,
+      notes, validUntil: validUntil ? new Date(validUntil) : null,
+      status: 'draft',
+      convertedToOrderId: null,
+      createdBy: { id: admin.id, name: admin.name },
+      createdAt: now, updatedAt: now,
+      history: [{ status: 'draft', at: now, by: admin.name, note: 'Quote created' }],
+    };
+    await (await col('quotations')).insertOne(quote);
+    const { _id, ...r } = quote;
+    return json(r);
+  }
+
+  if (path.startsWith('/admin/quotations/') && segments.length === 3 && method === 'GET') {
+    await requireAdmin();
+    const q = await (await col('quotations')).findOne({ id: segments[2] });
+    if (!q) return err('not found', 404);
+    const { _id, ...r } = q;
+    return json(r);
+  }
+
+  if (path.startsWith('/admin/quotations/') && segments.length === 3 && method === 'PUT') {
+    const admin = await requireAdmin();
+    const body = await request.json();
+    const existing = await (await col('quotations')).findOne({ id: segments[2] });
+    if (!existing) return err('not found', 404);
+    if (!['draft', 'sent'].includes(existing.status)) return err('Only draft or sent quotes can be edited');
+    const items = Array.isArray(body.items) ? body.items.map(it => ({
+      productId: it.productId || null,
+      name: String(it.name || '').trim(),
+      description: it.description || '',
+      qty: Number(it.qty) || 0,
+      unit: it.unit || 'pcs',
+      price: Number(it.price) || 0,
+      total: Math.round(((Number(it.qty) || 0) * (Number(it.price) || 0)) * 100) / 100,
+    })).filter(it => it.name && it.qty > 0) : existing.items;
+    const subtotal = items.reduce((s, it) => s + it.total, 0);
+    const taxRate = body.taxRate !== undefined ? Number(body.taxRate) : existing.taxRate;
+    const discount = body.discount !== undefined ? Number(body.discount) : existing.discount;
+    const shipping = body.shipping !== undefined ? Number(body.shipping) : existing.shipping;
+    const taxableBase = Math.max(0, subtotal - discount);
+    const tax = Math.round((taxableBase * taxRate) / 100 * 100) / 100;
+    const total = Math.round((taxableBase + tax + shipping) * 100) / 100;
+    const update = {
+      items, subtotal: Math.round(subtotal * 100) / 100, taxRate, tax, shipping, discount, total,
+      notes: body.notes !== undefined ? body.notes : existing.notes,
+      validUntil: body.validUntil ? new Date(body.validUntil) : existing.validUntil,
+      customerName: body.customerName || existing.customerName,
+      customerEmail: body.customerEmail || existing.customerEmail,
+      customerPhone: body.customerPhone !== undefined ? body.customerPhone : existing.customerPhone,
+      shippingAddress: body.shippingAddress || existing.shippingAddress,
+      updatedAt: new Date(),
+    };
+    await (await col('quotations')).updateOne(
+      { id: existing.id },
+      { $set: update, $push: { history: { status: existing.status, at: new Date(), by: admin.name, note: 'Quote updated' } } }
+    );
+    const fresh = await (await col('quotations')).findOne({ id: existing.id });
+    const { _id, ...r } = fresh;
+    return json(r);
+  }
+
+  if (path.startsWith('/admin/quotations/') && segments.length === 3 && method === 'DELETE') {
+    await requireAdmin();
+    const existing = await (await col('quotations')).findOne({ id: segments[2] });
+    if (!existing) return err('not found', 404);
+    if (!['draft', 'rejected', 'expired'].includes(existing.status)) return err('Only draft, rejected or expired quotes can be deleted');
+    await (await col('quotations')).deleteOne({ id: existing.id });
+    return json({ ok: true });
+  }
+
+  if (path.startsWith('/admin/quotations/') && segments[3] === 'send' && method === 'POST') {
+    const admin = await requireAdmin();
+    const existing = await (await col('quotations')).findOne({ id: segments[2] });
+    if (!existing) return err('not found', 404);
+    if (!['draft', 'sent'].includes(existing.status)) return err('Only draft or sent quotes can be emailed');
+    const rowsHtml = existing.items.map(it =>
+      `<tr><td style="padding:6px 8px;border-bottom:1px solid #eee;">${it.name}${it.description ? `<br/><span style="color:#888;font-size:11px;">${it.description}</span>` : ''}</td>` +
+      `<td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:center;">${it.qty} ${it.unit}</td>` +
+      `<td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;">₹${Number(it.price).toFixed(2)}</td>` +
+      `<td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;">₹${Number(it.total).toFixed(2)}</td></tr>`
+    ).join('');
+    const summaryHtml = `
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin:14px 0;border:1px solid #eee;">
+        <thead><tr style="background:#f8f8f5;"><th style="padding:8px;text-align:left;">Item</th><th style="padding:8px;">Qty</th><th style="padding:8px;text-align:right;">Price</th><th style="padding:8px;text-align:right;">Total</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <div style="text-align:right;font-size:13px;color:#374151;">
+        Subtotal: ₹${existing.subtotal.toFixed(2)}<br/>
+        ${existing.discount ? `Discount: -₹${existing.discount.toFixed(2)}<br/>` : ''}
+        Tax (${existing.taxRate}%): ₹${existing.tax.toFixed(2)}<br/>
+        ${existing.shipping ? `Shipping: ₹${existing.shipping.toFixed(2)}<br/>` : ''}
+      </div>
+      ${existing.notes ? `<p style="color:#374151;font-size:13px;background:#f9fafb;padding:10px;border-left:3px solid #15803d;"><em>${existing.notes}</em></p>` : ''}
+    `;
+    const result = await sendQuotationEmail(existing.customerEmail, {
+      customerName: existing.customerName,
+      number: existing.number,
+      validUntil: existing.validUntil ? new Date(existing.validUntil).toLocaleDateString('en-IN') : null,
+      total: existing.total,
+      summaryHtml,
+    });
+    const now = new Date();
+    await (await col('quotations')).updateOne(
+      { id: existing.id },
+      { $set: { status: 'sent', sentAt: now, updatedAt: now }, $push: { history: { status: 'sent', at: now, by: admin.name, note: result.sent ? 'Emailed to customer' : 'Marked as sent (email not configured)' } } }
+    );
+    return json({ ok: true, emailSent: result.sent });
+  }
+
+  if (path.startsWith('/admin/quotations/') && (segments[3] === 'accept' || segments[3] === 'reject') && method === 'POST') {
+    const admin = await requireAdmin();
+    const action = segments[3];
+    const existing = await (await col('quotations')).findOne({ id: segments[2] });
+    if (!existing) return err('not found', 404);
+    if (!['sent', 'draft'].includes(existing.status)) return err('Quote cannot be ' + action + 'ed at this stage');
+    const body = await request.json().catch(() => ({}));
+    const newStatus = action === 'accept' ? 'accepted' : 'rejected';
+    const now = new Date();
+    await (await col('quotations')).updateOne(
+      { id: existing.id },
+      { $set: { status: newStatus, updatedAt: now }, $push: { history: { status: newStatus, at: now, by: admin.name, note: body.note || '' } } }
+    );
+    return json({ ok: true, status: newStatus });
+  }
+
+  if (path.startsWith('/admin/quotations/') && segments[3] === 'convert' && method === 'POST') {
+    const admin = await requireAdmin();
+    const existing = await (await col('quotations')).findOne({ id: segments[2] });
+    if (!existing) return err('not found', 404);
+    if (existing.status === 'converted') return err('Quote already converted to order ' + existing.convertedToOrderId);
+    if (!['accepted', 'sent'].includes(existing.status)) return err('Only accepted (or sent) quotes can be converted');
+    // Build order from quote
+    const orderId = 'DA' + Date.now().toString(36).toUpperCase() + uuid().slice(0, 4).toUpperCase();
+    const now = new Date();
+    const orderItems = existing.items.map(it => ({
+      productId: it.productId || ('custom-' + uuid().slice(0, 6)),
+      name: it.name,
+      image: '',
+      price: it.price,
+      qty: it.qty,
+      total: it.total,
+      weight: '',
+      unit: it.unit || '',
+    }));
+    const order = {
+      id: orderId,
+      userId: existing.customerId || null,
+      customer: { name: existing.customerName, email: existing.customerEmail, phone: existing.customerPhone || '' },
+      items: orderItems,
+      address: existing.shippingAddress || { name: existing.customerName, phone: existing.customerPhone || '', line1: '', city: '', state: '', pincode: '' },
+      subtotal: existing.subtotal,
+      discount: existing.discount,
+      tax: existing.tax,
+      shipping: existing.shipping,
+      total: existing.total,
+      couponCode: null,
+      status: 'placed',
+      paymentMethod: 'QUOTE',
+      paymentVerified: false,
+      paymentDetails: null,
+      deliveryQuote: null,
+      sourceQuoteId: existing.id,
+      sourceQuoteNumber: existing.number,
+      createdAt: now,
+      updates: [{ status: 'placed', at: now, note: `Converted from quote ${existing.number}` }],
+    };
+    await (await col('orders')).insertOne(order);
+    await (await col('quotations')).updateOne(
+      { id: existing.id },
+      { $set: { status: 'converted', convertedToOrderId: orderId, updatedAt: now }, $push: { history: { status: 'converted', at: now, by: admin.name, note: 'Converted to order ' + orderId } } }
+    );
+    return json({ ok: true, orderId, orderNumber: orderId });
   }
 
   return err('not found: ' + method + ' ' + path, 404);
